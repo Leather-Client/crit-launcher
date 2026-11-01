@@ -1,6 +1,6 @@
 # Crit Launcher
 
-Crit Launcher is a open source minecraft launcher 
+Crit Launcher is a open source minecraft launcher written in python and html
 
 <details>
 <summary>notes</summary>

@@ -194,6 +194,13 @@ MC_PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile"
 MC_SKINS_URL = "https://api.minecraftservices.com/minecraft/profile/skins"
 MC_CAPE_URL = "https://api.minecraftservices.com/minecraft/profile/capes/active"
 MOJANG_LOOKUP_URL = "https://api.mojang.com/users/profiles/minecraft/"
+
+ELY_AUTH_URL = "https://authserver.ely.by"
+ELY_SKINS_URL = "https://skinsystem.ely.by"
+ELY_AUTH = ELY_AUTH_URL + "/auth/authenticate"
+ELY_REFRESH = ELY_AUTH_URL + "/auth/refresh"
+ELY_INJECTOR_REPO = "yushijinhun/authlib-injector"
+ELY_INJECTOR_API = "https://api.github.com/repos/" + ELY_INJECTOR_REPO + "/releases/latest"
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/"
 
 MS_CLIENT_ID = "00000000402b5328"
@@ -715,10 +722,13 @@ def ensure_mc_textures() -> dict:
 
 
 class JsonStore:
-    def __init__(self, path: Path, default):
+    def __init__(self, path: Path, default, sensitive: bool = False):
         self.path = path
         self._lock = threading.RLock()
         self._default = default
+        self._sensitive = sensitive
+        if self.path.exists() and sensitive and os.name == "posix":
+            os.chmod(self.path, 0o600)
         if not self.path.exists():
             self._write(default)
 
@@ -727,6 +737,8 @@ class JsonStore:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, self.path)
+        if self._sensitive and os.name == "posix":
+            os.chmod(self.path, 0o600)
 
     def _read(self):
         try:
@@ -753,7 +765,7 @@ class JsonStore:
             return data
 
 
-accounts_store = JsonStore(ACCOUNTS_FILE, [])
+accounts_store = JsonStore(ACCOUNTS_FILE, [], sensitive=True)
 THEMES = ("green", "blue", "purple", "red", "orange", "pink", "custom")
 UI_STYLES = ("default", "minecraft", "modrinth", "fastclient", "sklauncher")
 ADDON_VIEWS = ("browse", "installed")
@@ -1218,7 +1230,14 @@ class MetaCache:
         except Exception:
             log_exception("Failed to download fabric game list")
             raise RuntimeError("Fabric versions could not be retrieved.")
-        versions = [g.get("version") for g in games if g.get("version")]
+        versions = []
+        for g in games:
+            v = g.get("version")
+            if not v:
+                continue
+            base = v.split("+")[0]
+            if base not in versions:
+                versions.append(base)
         with self._lock:
             self.fabric_games = versions
         return versions
@@ -3289,12 +3308,12 @@ def build_launch_command(meta: dict, account: dict, memory_mb: int, java_exe: st
 
     replacements = {
         "auth_player_name": account["name"],
-        "auth_uuid": account["uuid"].replace("-", "") if account.get("type") == "microsoft" else account["uuid"],
-        "auth_access_token": account.get("mc_token") or "0" if account.get("type") == "microsoft" else "0",
+        "auth_uuid": account["uuid"].replace("-", "") if account.get("type") in ("microsoft", "ely") else account["uuid"],
+        "auth_access_token": (account.get("mc_token") or "0") if account.get("type") in ("microsoft", "ely") else "0",
         "auth_session": "0",
         "auth_xuid": "0",
         "clientid": "0",
-        "user_type": "msa" if account.get("type") == "microsoft" else "legacy",
+        "user_type": "msa" if account.get("type") in ("microsoft", "ely") else "legacy",
         "user_properties": "{}",
         "version_name": meta["version"],
         "version_type": "release",
@@ -3355,6 +3374,11 @@ def build_launch_command(meta: dict, account: dict, memory_mb: int, java_exe: st
         except ValueError:
             tokens = extra_jvm.split()
         command.extend(t.strip('"') for t in tokens if t.strip('"'))
+    if account.get("type") == "ely":
+        injector = authlib_injector()
+        if injector:
+            command.insert(1, f"-javaagent:{injector}=ely.by")
+
     command.append(meta["main_class"])
     command.extend(game_args)
     if options.get("fullscreen"):
@@ -3713,6 +3737,8 @@ class AuthError(Exception):
 
 
 def ensure_fresh_account(account: dict) -> dict:
+    if account.get("type") == "ely":
+        return refresh_ely_account(account)
     if account.get("type") != "microsoft":
         return account
     if account.get("mc_token") and float(account.get("mc_expires", 0)) - time.time() > 60:
@@ -3855,6 +3881,163 @@ def refresh_ms_account(account: dict) -> dict:
     return dict(account, mc_token=mc_token, mc_expires=mc_exp, refresh_token=new_rt)
 
 
+def ely_post(url: str, payload: dict, token=None):
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT,
+               "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            raw = resp.read()
+            return resp.status, (json.loads(raw.decode("utf-8")) if raw.strip() else {})
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            return exc.code, json.loads(raw.decode("utf-8"))
+        except Exception:
+            return exc.code, {}
+
+
+def ely_sign_in(username: str, password: str, totp: str = "") -> dict:
+    if totp:
+        password = password + ":" + totp
+    payload = {"username": username, "password": password, "clientToken": _ely_client_token()}
+    try:
+        status, data = ely_post(ELY_AUTH, payload)
+    except Exception:
+        # traceback would include the frame holding the plaintext password
+        raise AuthError("Couldn't reach Ely.by. Check your connection.") from None
+    message = (data or {}).get("errorMessage") or (data or {}).get("error") or ""
+    if status == 401 and "two factor" in message.lower():
+        raise AuthError("__totp__")
+    if status != 200 or not data.get("accessToken"):
+        raise AuthError(message or "Ely.by couldn't complete that sign-in.")
+    profile = data.get("selectedProfile") or (data.get("availableProfiles") or [{}])[0]
+    if not profile.get("id"):
+        raise AuthError("That Ely.by account has no Minecraft profile.")
+    return save_ely_account(profile.get("name"), profile["id"], data["accessToken"],
+                            payload["clientToken"])
+
+
+def _ely_client_token() -> str:
+    stored = settings_store.read().get("ely_client_token")
+    if stored:
+        return stored
+    token = uuid.uuid4().hex
+    settings_store.update(lambda s: s.__setitem__("ely_client_token", token))
+    return token
+
+
+def save_ely_account(name: str, account_uuid: str, token: str, client_token: str) -> dict:
+    account = {"name": name, "uuid": account_uuid, "type": "ely",
+               "mc_token": token, "ely_client_token": client_token}
+
+    def upsert(accounts):
+        for a in accounts:
+            if a.get("uuid") == account_uuid:
+                a.update(account)
+                return
+        accounts.append(account)
+    accounts_store.update(upsert)
+    settings_store.update(lambda st: st.__setitem__("active_account", account_uuid))
+    return account
+
+
+def refresh_ely_account(account: dict) -> dict:
+    token = account.get("mc_token")
+    client_token = account.get("ely_client_token") or _ely_client_token()
+    if not token:
+        raise AuthError("Sign in with Ely.by again.")
+    try:
+        status, data = ely_post(ELY_REFRESH, {"accessToken": token, "clientToken": client_token})
+    except Exception:
+        raise AuthError("Couldn't reach Ely.by to refresh your session.") from None
+    if status != 200 or not data.get("accessToken"):
+        raise AuthError("Your Ely.by session expired. Sign in again from the Accounts page.")
+    new_token = data["accessToken"]
+
+    def upd(accounts):
+        for a in accounts:
+            if a.get("uuid") == account.get("uuid"):
+                a["mc_token"] = new_token
+                a["ely_client_token"] = client_token
+    accounts_store.update(upd)
+    return dict(account, mc_token=new_token, ely_client_token=client_token)
+
+
+_ELY_SKIN_CACHE = {}
+_ELY_SKIN_TTL = 5
+_ELY_SKIN_MISS_TTL = 60
+
+
+def ely_skin_for(name: str):
+    """Skin and cape for one nick, via the bridge because the png has no CORS."""
+    key = (name or "").strip().lower()
+    if not key:
+        return None
+
+    now = time.time()
+    hit = _ELY_SKIN_CACHE.get(key)
+    if hit:
+        value, stamped, ttl = hit
+        if now - stamped < ttl:
+            return value
+
+    try:
+        data = http_get_json(ELY_SKINS_URL + "/textures/" + urllib.parse.quote(key), retries=0)
+    except Exception:
+        data = None
+
+    skin = (data or {}).get("SKIN") or {} if isinstance(data, dict) else {}
+    uri = fetch_texture_uri(skin.get("url")) if skin.get("url") else None
+    if not uri:
+        _ELY_SKIN_CACHE[key] = (None, now, _ELY_SKIN_MISS_TTL)
+        return None
+
+    cape_url = ((data.get("CAPE") or {}).get("url"))
+    result = {"name": name, "image": uri,
+              "cape": fetch_texture_uri(cape_url) if cape_url else None,
+              "variant": "slim" if (skin.get("metadata") or {}).get("model") == "slim" else "classic"}
+
+    if len(_ELY_SKIN_CACHE) >= 256:
+        oldest = min(_ELY_SKIN_CACHE, key=lambda k: _ELY_SKIN_CACHE[k][1])
+        _ELY_SKIN_CACHE.pop(oldest, None)
+    _ELY_SKIN_CACHE[key] = (result, now, _ELY_SKIN_TTL)
+    return result
+
+
+def authlib_injector() -> Path | None:
+    """Download authlib-injector once; Ely.by needs it for skins in game."""
+    dest = RUNTIME_DIR / "authlib-injector.jar"
+    if file_is_valid(dest, None, None):
+        try:
+            with zipfile.ZipFile(dest) as zf:
+                if any(n.endswith("Premain.class") for n in zf.namelist()):
+                    return dest
+        except (zipfile.BadZipFile, OSError):
+            pass
+
+    for attempt in range(2):
+        try:
+            # the asset name carries the version, so ask GitHub which one it is
+            release = http_get_json(ELY_INJECTOR_API, timeout=20, retries=0)
+            asset = next((a for a in release.get("assets", [])
+                          if (a.get("name") or "").endswith(".jar")), None)
+            if not asset:
+                break
+            http_download(asset["browser_download_url"], dest, asset.get("size"))
+            with zipfile.ZipFile(dest) as zf:
+                if any(n.endswith("Premain.class") for n in zf.namelist()):
+                    return dest
+        except Exception:
+            log_exception("authlib-injector download")
+        dest.unlink(missing_ok=True)
+        time.sleep(1.0 * (attempt + 1))
+    return None
+
+
 def find_account(accounts: list, key):
     if not key:
         return None
@@ -3904,13 +4087,14 @@ def png_uri(data: bytes) -> str:
 
 
 def _texture_host_ok(host: str) -> bool:
-    return host == "minecraft.net" or host.endswith(".minecraft.net")
+    return (host == "minecraft.net" or host.endswith(".minecraft.net")
+            or host == "ely.by" or host.endswith(".ely.by"))
 
 
-def fetch_texture_uri(url):
+def fetch_texture_uri(url, ely=False):
     if not url:
         return None
-    if url.startswith("http://textures.minecraft.net"):
+    if url.startswith("http://"):
         url = "https://" + url[len("http://"):]
     if not _texture_host_ok(urllib.parse.urlparse(url).hostname or ""):
         return None
@@ -5949,12 +6133,18 @@ class API(ServerMixin):
             return {"success": False, "error": str(exc)}
 
 
-    def get_versions(self):
+    def get_versions(self, include_snapshots=False):
         try:
             manifest = meta_cache.get_manifest()
-            releases = [v for v in manifest["versions"] if v["type"] == "release"]
-            return {"success": True, "versions": releases,
-                    "latest_release": manifest.get("latest", {}).get("release")}
+            allowed = ("release", "snapshot", "old_beta", "old_alpha")
+            versions = [v for v in manifest["versions"] if v.get("type") in allowed]
+            if not include_snapshots:
+                versions = [v for v in versions if v.get("type") == "release"]
+            latest = manifest.get("latest", {})
+            return {"success": True, "versions": versions,
+                    "latest_release": latest.get("release"),
+                    "latest_snapshot": latest.get("snapshot"),
+                    "snapshots": any(v.get("type") == "snapshot" for v in versions)}
         except Exception:
             log_exception("get_versions")
             return {"success": False, "error": "Failed to load versions"}
@@ -6004,6 +6194,25 @@ class API(ServerMixin):
             log_exception("get_forge_mc_versions")
             return {"success": False, "error": str(exc) or "Forge versions could not be retrieved."}
 
+
+    def add_ely_account(self, username, password, totp=""):
+        try:
+            username = (username or "").strip()
+            if not username or len(username) > 190:
+                return {"success": False, "error": "Enter your Ely.by username or e-mail."}
+            if not password:
+                return {"success": False, "error": "Enter your Ely.by password."}
+            account = ely_sign_in(username, password, (totp or "").strip())
+            self.push_state()
+            return {"success": True, "account": public_account(account)}
+        except AuthError as exc:
+            if str(exc) == "__totp__":
+                return {"success": False, "totp": True,
+                        "error": "This account has two-factor enabled. Enter the code from your app."}
+            return {"success": False, "error": str(exc) or "Ely.by sign-in failed."}
+        except Exception:
+            logging.warning("add_ely_account failed")
+            return {"success": False, "error": "Couldn't reach Ely.by. Check your connection."}
 
     def add_account(self, username):
         try:
@@ -6166,13 +6375,55 @@ class API(ServerMixin):
     def _skin_account(self):
         accounts = accounts_store.read()
         acc = find_account(accounts, settings_store.read().get("active_account")) or (accounts[0] if accounts else None)
-        if not acc or acc.get("type") != "microsoft":
-            raise AuthError("Skins and capes need a Microsoft account. Add one under Accounts.")
+        if not acc or acc.get("type") not in ("microsoft", "ely"):
+            raise AuthError("Skins and capes need a Microsoft or Ely.by account. Add one under Accounts.")
         return ensure_fresh_account(acc)
+
+    def get_live_skins(self, names, active=None):
+        try:
+            names = [n for n in (names or []) if isinstance(n, str) and n.strip()][:40]
+            faces = {}
+            if names:
+                with ThreadPoolExecutor(max_workers=min(8, len(names))) as pool:
+                    for name, skin in zip(names, pool.map(ely_skin_for, names)):
+                        if skin:
+                            faces[name] = skin["image"]
+            payload = {"success": True, "faces": faces}
+            if active:
+                acc = find_account(accounts_store.read(), settings_store.read().get("active_account"))
+                if acc and acc.get("type") == "offline":
+                    local = self.local_skin_state()
+                    if local.get("success") and local.get("skin"):
+                        payload["active"] = {"name": acc["name"], "image": local["skin"],
+                                             "variant": "classic"}
+                else:
+                    skin = ely_skin_for(str(active))
+                    if skin:
+                        payload["active"] = skin
+            return payload
+        except Exception:
+            log_exception("get_live_skins")
+            return {"success": False, "error": "Couldn't refresh skins."}
+
+    def ely_skin_profile(self):
+        try:
+            acc = find_account(accounts_store.read(), settings_store.read().get("active_account"))
+            if not acc or acc.get("type") != "ely":
+                return {"success": False, "error": "No Ely.by account is active."}
+            skin = ely_skin_for(acc["name"])
+            if not skin:
+                return {"success": False, "error": "Ely.by has no skin for that account."}
+            return {"success": True, "name": acc["name"], "skin": skin["image"],
+                    "variant": skin["variant"], "capes": [], "cape_id": None}
+        except Exception:
+            log_exception("ely_skin_profile")
+            return {"success": False, "error": "Couldn't read your Ely.by skin."}
 
     def get_skin_profile(self):
         try:
             acc = self._skin_account()
+            if acc.get("type") == "ely":
+                return self.ely_skin_profile()
             status, prof = http_get_auth(MC_PROFILE_URL, acc["mc_token"])
             if status != 200 or "id" not in prof:
                 return {"success": False, "error": _skin_error(status)}
@@ -6356,6 +6607,10 @@ class API(ServerMixin):
                         cape = None
                 if skin and cape:
                     break
+            if skin is None:
+                stored = SKINS_DIR / f"{username}.png"
+                if stored.is_file():
+                    skin = png_uri(stored.read_bytes())
             return {"success": True, "name": username, "variant": "classic", "skin": skin,
                     "cape_id": cape["id"] if cape else None,
                     "capes": [{"alias": cape["name"], "active": True}] if cape else []}
@@ -6364,6 +6619,32 @@ class API(ServerMixin):
         except Exception as exc:
             log_exception("local_skin_state")
             return {"success": False, "error": f"Couldn't read the local skin: {exc}"}
+
+    def local_use_ely(self, name=None):
+        """Copy an Ely.by skin onto the offline account's local skin file."""
+        try:
+            username = self._offline_username()
+            source = (name or username).strip()
+            skin = ely_skin_for(source)
+            if not skin:
+                return {"success": False, "error": f"Ely.by has no skin for {source}."}
+
+            # keep a copy either way, so it applies once CustomSkinLoader shows up
+            png = decode_png_uri(skin["image"])
+            _write_bytes_atomic(SKINS_DIR / f"{username}.png", png)
+            settings_store.update(lambda s: s.__setitem__("local_ely_source", source))
+
+            result = self.local_set_skin(skin["image"], [i["name"] for i in list_instances()])
+            if not result.get("success") and not result.get("results"):
+                return {"success": True, "saved": True, "pending": True,
+                        "message": "Saved. It applies once an instance has CustomSkinLoader."}
+            result["saved"] = True
+            return result
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        except Exception:
+            log_exception("local_use_ely")
+            return {"success": False, "error": "Couldn't copy that Ely.by skin."}
 
     def local_install_csl(self, instance_name):
         try:
@@ -6422,6 +6703,16 @@ class API(ServerMixin):
         except Exception as exc:
             log_exception("local_set_skin")
             return {"success": False, "error": f"Couldn't set the local skin: {exc}"}
+
+    def local_ely_preview(self, name):
+        try:
+            skin = ely_skin_for((name or "").strip())
+            if not skin:
+                return {"success": False, "error": f"No Ely.by skin for {name}."}
+            return {"success": True, **skin}
+        except Exception:
+            log_exception("local_ely_preview")
+            return {"success": False, "error": "Couldn't reach Ely.by."}
 
     def local_capes(self):
         return {"success": True, "capes": [{"id": c["id"], "name": c["name"], "url": _cape_url(c)} for c in MOJANG_CAPES]}
@@ -6484,7 +6775,7 @@ class API(ServerMixin):
             name = (name or "").strip()
             if not re.match(r"^[A-Za-z0-9_]{1,16}$", name):
                 return {"success": False, "error": "Enter a valid player name."}
-            result = _fetch_named_skin(name)
+            result = _fetch_named_skin(name) or ely_skin_for(name)
             if not result:
                 return {"success": False, "error": f'No skin found for "{name}". They may use the default skin.'}
             return {"success": True, **result}

@@ -3,28 +3,6 @@
 Crit Launcher is a open source minecraft launcher 
 
 <details>
-<summary>feature list</summary>
-fabric forge neoforge and vanilla support
-  
-addon managment(mods resource packs modpacks shaders)
-
-skin managment(with a catalog)
-
-built in local server hosting
-
-importing data from other launchers
-
-official Microsoft authentication and offline support
-
-themes: default minecraft modrinth fastclient sklauncher
-
-add shortcuts to desktop for instance
-
-customizable viewing methods for instances
-
-play time tracking
-</details>
-<details>
 <summary>notes</summary>
 we are not affiliated with microsoft or mojang
 

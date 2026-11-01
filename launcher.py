@@ -2,6 +2,7 @@
 import os
 import sys
 import base64
+import binascii
 import struct
 import re
 import json
@@ -3455,6 +3456,13 @@ CRIT_CLIENT_MODS = ["sodium", "fabric-api", "entityculling", "lithium",
                     "immediatelyfast", "zfastnoise", "moreculling"]
 CHANGELOG_REPO = "snigglaberry/crit-launcher"
 
+# Releases are signed with a detached ed25519 signature over SHA256SUMS.
+# Empty means the check is skipped (a warning is logged). Fill it in to enforce;
+# see the release notes for how to generate the pair.
+UPDATE_TRUSTED_KEYS = ()
+UPDATE_SUMS = "SHA256SUMS"
+UPDATE_SIG = "SHA256SUMS.sig"
+
 
 def _bump_playtime(s: dict, elapsed: int):
     s["playtime_seconds"] = int(s.get("playtime_seconds", 0)) + elapsed
@@ -3521,6 +3529,40 @@ def _version_tuple(tag) -> tuple:
 
 CHANGELOG_CACHE = DATA_DIR / "changelog_cache.json"
 _changelog_mem = {"at": 0.0, "value": None}
+
+
+def update_signed_sha256(release: dict, asset_name: str) -> str:
+    """sha256 for asset_name, but only from a signature-verified SHA256SUMS.
+
+    This is the check that stops a hijacked release from running code: the sums
+    list is only trusted when it carries a valid signature from a baked-in key.
+    """
+    assets = {a.get("name"): a for a in release.get("assets") or []}
+    if UPDATE_SUMS not in assets or UPDATE_SIG not in assets:
+        raise RuntimeError("This release isn't signed, so it wasn't installed.")
+    sums = http_get_bytes(assets[UPDATE_SUMS]["browser_download_url"], limit=1 << 20)
+    signature = http_get_bytes(assets[UPDATE_SIG]["browser_download_url"], limit=1 << 20)
+
+    message = ("crit launcher release %s\n" % release.get("tag_name")).encode() + sums
+    keys = [base64.b64decode(k) for k in UPDATE_TRUSTED_KEYS]
+    signed = False
+    for line in signature.decode("utf-8", "replace").splitlines():
+        try:
+            raw = base64.b64decode(line.strip(), validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if len(raw) == 64 and any(horizon_ed25519_verify(k, message, raw) for k in keys):
+            signed = True
+            break
+    if not signed:
+        raise RuntimeError("The update's signature didn't match, so it wasn't installed.")
+
+    for line in sums.decode("utf-8", "replace").splitlines():
+        parts = line.strip().split(None, 1)
+        if (len(parts) == 2 and parts[1].lstrip("*") == asset_name
+                and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0])):
+            return parts[0].lower()
+    raise RuntimeError("The updater isn't in the signed checksums, so it wasn't installed.")
 
 
 class AuthError(Exception):
@@ -7036,7 +7078,8 @@ class API(ServerMixin):
             value = {"tag": rel.get("tag_name"), "name": rel.get("name"),
                      "date": rel.get("published_at"), "text": text[:20000],
                      "setup_url": setup.get("browser_download_url") if setup else None,
-                     "setup_size": int(setup.get("size") or 0) if setup else 0}
+                     "setup_size": int(setup.get("size") or 0) if setup else 0,
+                     "assets": assets, "release_tag": rel.get("tag_name")}
             _changelog_mem["at"], _changelog_mem["value"] = now, value
             try:
                 CHANGELOG_CACHE.write_text(json.dumps(value), encoding="utf-8")
@@ -7092,6 +7135,17 @@ class API(ServerMixin):
                 return
             size = int(res.get("setup_size") or 0)
             dest = DATA_DIR / "update" / "setup.exe"
+
+            # A hijacked release is only dangerous because we run it, so the
+            # signature has to be checked before anything reaches startfile.
+            expected = None
+            try:
+                expected = update_signed_sha256(res, Path(url).name)
+            except RuntimeError as exc:
+                if UPDATE_TRUSTED_KEYS:
+                    self.emit("updateError", {"message": str(exc)})
+                    return
+                logging.warning("Update signature not checked: %s", exc)
             done = [0]
 
             def progress(n):
@@ -7100,7 +7154,7 @@ class API(ServerMixin):
                     self.emit("updateProgress", {"percent": min(100, int(done[0] * 100 / size))})
 
             self.emit("updateProgress", {"percent": 0})
-            http_download(url, dest, progress_cb=progress)
+            http_download(url, dest, size or None, expected, progress_cb=progress)
             self.emit("updateInstalling", {})
             os.startfile(str(dest))
             time.sleep(1.5)

@@ -458,7 +458,7 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 .cselect { position: relative; }
 .cselect-btn {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 10px 12px; text-align: left; font: inherit; line-height: 20px; min-height: 43px;
+  padding: 10px 12px; text-align: left;
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 10px; color: var(--text);
   transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
@@ -1155,18 +1155,6 @@ button.switch { cursor: pointer; padding: 0; }
 .crop-stage.grabbing { cursor: grabbing; }
 .crop-stage canvas { display: block; width: 100%; height: 100%; }
 .crop-controls { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 18px; color: var(--dim); }
-.range-hint { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--faint); }
-.field label b { margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--accent); }
-.check-row.snap-inline { margin: 2px 0 0; padding: 4px 0; font-size: 12.5px; color: var(--dim); }
-.check-row.snap-inline .checkbox { flex: 0 0 auto; }
-.ely-strip { display: flex; gap: 8px; margin-bottom: 12px; }
-.ely-strip .input { flex: 1; }
-input[type=range].input { -webkit-appearance: none; appearance: none; height: 6px; padding: 0; border: 0; border-radius: 3px; cursor: pointer;
-  background: linear-gradient(90deg, var(--accent) 0, var(--accent) var(--pct, 0%), var(--panel-3) var(--pct, 0%), var(--panel-3) 100%);
-  background-origin: border-box; background-clip: border-box; }
-input[type=range].input::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--text); border: 2px solid var(--panel); box-shadow: 0 1px 4px rgba(0,0,0,.4); }
-input[type=range].input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 2px solid var(--panel); }
 .crop-controls input[type=range] { width: 180px; accent-color: var(--accent); }
 .crop-prev { width: 48px; height: 48px; border-radius: 12px; background: var(--panel-3); overflow: hidden; flex-shrink: 0; }
 .crop-prev canvas { width: 100%; height: 100%; display: block; }
@@ -2872,8 +2860,7 @@ input[type=range].input::-moz-range-thumb { width: 14px; height: 14px; border-ra
                     <button data-loader="horizon">Horizon</button>
                   </div>
                 </div>
-                <div class="field" id="version-field"><label id="version-label">Minecraft version</label><div id="version-select"></div>
-                  <div class="check-row mini snap-inline" id="snap-row"><div class="checkbox" id="snap-toggle"></div><span>Show snapshots and old versions</span></div></div>
+                <div class="field" id="version-field"><label>Minecraft version</label><div id="version-select"></div></div>
                 <div class="field row-hidden" id="loader-version-row"><label id="loader-version-label">Loader version</label><div id="loader-version-select"></div></div>
               </div>
               <div class="form-error" id="new-error" style="margin:10px 0 0;min-height:16px"></div>
@@ -3040,12 +3027,8 @@ input[type=range].input::-moz-range-thumb { width: 14px; height: 14px; border-ra
         </div>
         <div class="card setting-card">
           <div class="nic-grid" style="margin-bottom:18px">
-            <div class="field"><label for="set-memory">Maximum memory <b id="mem-max-val">2048 MB</b></label>
-              <input class="input" id="set-memory" type="range" min="512" max="8192" step="256" />
-              <div class="range-hint"><span>512 MB</span><span id="mem-max-cap"></span></div></div>
-            <div class="field"><label for="set-minmem">Initial memory <b id="mem-min-val">Auto</b></label>
-              <input class="input" id="set-minmem" type="range" min="0" max="8192" step="256" />
-              <div class="range-hint"><span>Auto</span><span id="mem-min-cap"></span></div></div>
+            <div class="field"><label for="set-memory">Maximum memory (MB)</label><input class="input" id="set-memory" type="number" min="512" step="256" /></div>
+            <div class="field"><label for="set-minmem">Initial memory (MB)</label><input class="input" id="set-minmem" type="number" min="256" step="256" placeholder="Auto" /></div>
           </div>
           <div class="field"><label for="set-java">Custom Java path (optional)</label>
             <input class="input" id="set-java" placeholder="Leave empty to use the right Java automatically" autocomplete="off" />
@@ -3556,7 +3539,6 @@ function hydrateFaces(root = document) {
       img.src = sources[i];
     };
     if (FACE_OK.has(name)) { el.innerHTML = ""; el.appendChild(FACE_OK.get(name).cloneNode()); return; }
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_live_skins) return;
     tryLoad(0);
   });
 }
@@ -4120,7 +4102,7 @@ function renderTopbar() {
     hydrateFaces(el);
   }
   $("#top-account-name").textContent = acc ? acc.name : "No account";
-  const tt = $("#top-account-type"); if (tt) tt.textContent = acc ? (acc.type === "ely" ? "Ely.by" : acc.type === "microsoft" ? "Minecraft" : "Offline") : "Account";
+  const tt = $("#top-account-type"); if (tt) tt.textContent = acc ? (acc.type === "microsoft" ? "Minecraft" : "Offline") : "Account";
 }
 const BRAND_PATHS = '<path style="fill:var(--brand)" d="M4 0h1v9H4zM0 4h9v1H0zM3 3h3v3H3z"/><path style="fill:var(--brand-light)" d="M3 3h1v1H3zM5 3h1v1H5zM3 5h1v1H3zM5 5h1v1H5zM4 4h1v1H4z"/>';
 function brandSvg(size) {
@@ -4128,71 +4110,6 @@ function brandSvg(size) {
 }
 function ccIcon(size) { return `<span class="oc-badge" data-tip="Crit Client install">${brandSvg(size)}</span>`; }
 const HOME_SKIN = { key: null, token: 0 };
-
-const LIVE_SKIN = { timer: null, active: "" };
-
-function liveNames() {
-  const out = new Set();
-  (STATE.accounts || []).forEach((a) => a.name && out.add(a.name));
-  if (STATE.active_account && STATE.active_account.name) out.add(STATE.active_account.name);
-  document.querySelectorAll("[data-face]").forEach((el) => el.dataset.face && out.add(el.dataset.face));
-  return [...out];
-}
-
-function cropHead(img) {
-  // the bridge hands over a whole 64x64 skin sheet, avatars want the head
-  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
-  if (w < 64 || h < 32) return img;
-  const cv = document.createElement("canvas");
-  cv.width = cv.height = 64;
-  const ctx = cv.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(img, 8, 8, 8, 8, 0, 0, 64, 64);
-  ctx.drawImage(img, 40, 8, 8, 8, 0, 0, 64, 64);
-  const out = new Image();
-  out.alt = "";
-  out.src = cv.toDataURL("image/png");
-  return out;
-}
-
-function paintFace(name, uri) {
-  const cached = FACE_OK.get(name);
-  if (cached && cached.dataset.src === uri) return;
-  const sheet = new Image();
-  sheet.alt = "";
-  sheet.onload = () => {
-    const next = cropHead(sheet);
-    next.dataset.src = uri;
-    FACE_OK.set(name, next);
-    document.querySelectorAll(`[data-face="${CSS.escape(name)}"]`).forEach((el) => {
-      if (el.dataset.loaded !== name) return;
-      el.innerHTML = "";
-      el.appendChild(next.cloneNode(true));
-    });
-  };
-  sheet.src = uri;
-}
-
-async function pollSkins() {
-  if (document.hidden) return;
-  const names = liveNames();
-  if (!names.length) return;
-  let r;
-  try { r = await callApi("get_live_skins", names, STATE.active_account ? STATE.active_account.name : null); }
-  catch (_) { return; }
-  if (!r || !r.success) return;
-  Object.entries(r.faces || {}).forEach(([name, uri]) => uri && paintFace(name, uri));
-  if (r.active && r.active.image && r.active.image !== LIVE_SKIN.active) {
-    LIVE_SKIN.active = r.active.image;
-    loadHomeSkin(true);
-  }
-}
-
-function startLiveSkins() {
-  if (LIVE_SKIN.timer) return;
-  LIVE_SKIN.timer = setInterval(pollSkins, 1000);
-  pollSkins();
-}
 function loadHomeSkin(force) {
   if (isSkl()) return Promise.resolve();
   const p = _loadHomeSkin(force);
@@ -4216,7 +4133,7 @@ async function _loadHomeSkin(force) {
     const r = acc.type === "offline" ? await callApi("local_skin_state") : await callApi("get_skin_profile");
     if (r && r.success && r.skin) { img = await loadImage(r.skin).catch(() => null); if (img) slim = acc.type === "offline" ? detectSlim(img) : r.variant === "slim"; }
   } catch (_) {}
-  if (!img && acc.type !== "ely") {
+  if (!img) {
     img = await new Promise((res) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => res(i); i.onerror = () => res(null); i.src = `https://minotar.net/skin/${encodeURIComponent(acc.name)}`; });
     if (img) { try { slim = detectSlim(img); } catch (_) {} }
   }
@@ -4840,7 +4757,7 @@ function renderInstallBox() {
   $("#ib-detail").textContent = `${PROGRESS.current || ""}${detail ? " · " + detail : ""}`;
   $("#ib-bar").style.width = PROGRESS.percent + "%";
 }
-const NEW = { loader: "vanilla", version: null, loaderVersion: null, critclient: false, snapshots: false};
+const NEW = { loader: "vanilla", version: null, loaderVersion: null, critclient: false };
 const CRITCLIENT = { map: null };
 let VERSIONS = [];
 let versionSel, loaderVerSel;
@@ -4857,10 +4774,10 @@ $("#btn-add-instance").addEventListener("click", showAddView);
 $("#btn-import-instances").addEventListener("click", () => navigateTo("import"));
 $("#btn-back").addEventListener("click", () => { showInstanceList(); stagger($("#instance-list")); });
 async function loadVersions() {
-  const res = await callApi("get_versions", !!NEW.snapshots);
+  const res = await callApi("get_versions");
   if (!res.success) { $("#new-error").textContent = res.error || "Couldn't load versions."; return; }
   VERSIONS = res.versions;
-  NEW.version = (NEW.snapshots ? res.latest_snapshot : res.latest_release) || (VERSIONS[0] && VERSIONS[0].id);
+  NEW.version = res.latest_release || (VERSIONS[0] && VERSIONS[0].id);
   await updateVersionList();
 }
 function ccLoadersFor(v) {
@@ -4887,8 +4804,6 @@ async function updateVersionList() {
   const cc = !!(NEW.critclient && CRITCLIENT.map);
   let allowed = null;
   versionSel.setDisabled(true);
-  const snapRow = $("#snap-row");
-  if (snapRow) snapRow.hidden = NEW.loader === "horizon";
   if (!cc) {
     if (NEW.loader === "fabric") { const r = await callApi("get_fabric_game_versions"); if (r.success) allowed = new Set(r.versions); }
     else if (NEW.loader === "forge") { const r = await callApi("get_forge_mc_versions"); if (r.success) allowed = new Set(r.versions); }
@@ -4983,10 +4898,9 @@ function renderAccounts() {
   const active = STATE.active_account ? STATE.active_account.uuid : null;
   list.innerHTML = STATE.accounts.map((a) => {
     const ms = a.type === "microsoft";
-    const label = a.type === "ely" ? "Ely.by account" : ms ? "Microsoft account" : "Offline account";
     return `<div class="account-row${a.uuid === active ? " active" : ""}">
       <div class="ir-left">${faceHTML(a.name, 38)}<div><div class="name">${esc(a.name)}</div>
-        <div class="type${ms ? " ms" : ""}">${icon(ms ? "microsoft" : "user", 13)}${label}</div></div></div>
+        <div class="type${ms ? " ms" : ""}">${icon(ms ? "microsoft" : "user", 13)}${ms ? "Microsoft account" : "Offline account"}</div></div></div>
       <div class="btn-row">
         ${a.uuid === active ? "" : `<button class="btn small" data-acc="switch" data-key="${esc(a.uuid)}">${icon("check", 13)}Use</button>`}
         <button class="btn small icon-only danger" data-acc="remove" data-key="${esc(a.uuid)}" data-tip="Remove account" aria-label="Remove account">${icon("trash", 15)}</button>
@@ -5001,15 +4915,6 @@ $("#account-list").addEventListener("click", async (e) => {
 });
 $("#account-chip").addEventListener("click", () => openAccounts());
 $("#btn-add-account").addEventListener("click", openAddAccount);
-const memMax = document.getElementById("set-memory");
-const memMin = document.getElementById("set-minmem");
-if (memMax) memMax.addEventListener("input", paintMemoryLabels);
-if (memMin) memMin.addEventListener("input", paintMemoryLabels);
-$("#snap-toggle").addEventListener("click", () => {
-  NEW.snapshots = !NEW.snapshots;
-  $("#snap-toggle").classList.toggle("on", NEW.snapshots);
-  loadVersions();
-});
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; }
   catch (_) {
@@ -5030,46 +4935,16 @@ function renderAddChoose() {
     <div class="m-title" style="margin-bottom:4px">Add account</div>
     <div class="m-desc">How do you want to sign in?</div>
     <div class="choices">
-      <button class="choice enter" style="--i:0" data-choice="ely">
+      <button class="choice enter" style="--i:0" data-choice="offline">
         <span class="choice-ico">${icon("user", 20)}</span>
-        <span class="choice-text"><span class="n">Ely.by</span><span class="d">Sign in with your Ely.by account.</span></span>
+        <span class="choice-text"><span class="n">Offline</span><span class="d">Pick a username. No sign-in needed.</span></span>
         <span class="choice-arrow">${icon("chevron-right", 16)}</span></button>
       <button class="choice enter" style="--i:1" data-choice="microsoft">
         <span class="choice-ico">${icon("microsoft", 22)}</span>
         <span class="choice-text"><span class="n">Microsoft</span><span class="d">Sign in with your Microsoft account.</span></span>
         <span class="choice-arrow">${icon("chevron-right", 16)}</span></button>
-      <button class="choice enter" style="--i:2" data-choice="offline">
-        <span class="choice-ico">${icon("user", 20)}</span>
-        <span class="choice-text"><span class="n">Offline</span><span class="d">Pick a username. No sign-in needed.</span></span>
-        <span class="choice-arrow">${icon("chevron-right", 16)}</span></button>
     </div>`;
-  $$(".choice").forEach((c) => c.addEventListener("click", () => {
-    const k = c.dataset.choice;
-    return k === "offline" ? renderAddOffline() : k === "microsoft" ? renderWebLogin() : renderAddEly();
-  }));
-}
-function renderAddEly() {
-  msCancel(); addStep++;
-  $("#modal-body").innerHTML = `${backButton()}
-    <div class="m-title" style="margin-bottom:4px">Sign in with Ely.by</div>
-    <div class="m-desc">Your skin and cape come from your Ely.by profile.</div>
-    <div class="field"><label for="ely-user">Username or e-mail</label><input class="input" id="ely-user" maxlength="190" autocomplete="username" /></div>
-    <div class="field"><label for="ely-pass">Password</label><input class="input" id="ely-pass" type="password" autocomplete="current-password" /></div>
-    <div class="field" id="ely-totp-wrap" hidden><label for="ely-totp">Two-factor code</label><input class="input" id="ely-totp" inputmode="numeric" maxlength="8" autocomplete="one-time-code" /></div>
-    <div class="form-error" id="ely-error"></div>
-    <button class="btn primary" id="ely-go">${icon("check", 16)}Sign in</button>`;
-  $("#acc-back").addEventListener("click", renderAddChoose);
-  const user = $("#ely-user"), pass = $("#ely-pass"), totp = $("#ely-totp"), err = $("#ely-error");
-  const submit = async () => {
-    err.textContent = "";
-    const r = await callApi("add_ely_account", user.value, pass.value, totp.value || "");
-    if (r.success) { toast(`Signed in as ${r.account.name}`); closeModal(); return; }
-    if (r.totp) { $("#ely-totp-wrap").hidden = false; totp.focus(); }
-    err.textContent = r.error || "Sign in failed.";
-  };
-  $("#ely-go").addEventListener("click", submit);
-  [user, pass, totp].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); }));
-  setTimeout(() => user.focus(), 120);
+  $$(".choice").forEach((c) => c.addEventListener("click", () => c.dataset.choice === "offline" ? renderAddOffline() : renderWebLogin()));
 }
 function renderAddOffline() {
   msCancel(); addStep++;
@@ -6298,46 +6173,7 @@ function drawCape(canvas, src, scale = 6) {
   const g = canvas.getContext("2d"); g.imageSmoothingEnabled = false;
   g.drawImage(src, 1 * k, 1 * k, 10 * k, 16 * k, 0, 0, canvas.width, canvas.height);
 }
-
-const memGb = (mb) => mb ? `${Math.round(mb / 1024 * 10) / 10} GB` : "Auto";
-
-function memoryCaps() {
-  const total = STATE.memory_total_mb || 0;
-  const ceiling = STATE.memory_ceiling_mb || 8192;
-  return { total, ceiling };
-}
-
-function syncMemorySliders(maxMb, minMb) {
-  const { total, ceiling } = memoryCaps();
-  const max = $("#set-memory"), min = $("#set-minmem");
-  if (!max || !min) return;
-  max.max = ceiling;
-  min.max = ceiling;
-  max.value = Math.min(maxMb || 2048, ceiling);
-  min.value = Math.min(minMb || 0, max.value);
-  $("#mem-max-cap").textContent = total ? `max ${memGb(ceiling)}` : "";
-  $("#mem-min-cap").textContent = total ? `max ${memGb(ceiling)}` : "";
-  paintMemoryLabels();
-}
-
-function fillTrack(el) {
-  // the filled part of the track only spans between the two thumb centres
-  const lo = +el.min || 0, hi = +el.max || 100;
-  const frac = hi > lo ? (+el.value - lo) / (hi - lo) : 0;
-  el.style.setProperty("--pct", (frac * 100).toFixed(2) + "%");
-  el.style.setProperty("--thumb", frac >= 1 ? "0px" : "-1px");
-}
-
-function paintMemoryLabels() {
-  const max = $("#set-memory"), min = $("#set-minmem");
-  if (!max) return;
-  if (+min.value > +max.value) min.value = max.value;
-  fillTrack(max);
-  fillTrack(min);
-  $("#mem-max-val").textContent = memGb(+max.value) + ` (${+max.value} MB)`;
-  $("#mem-min-val").textContent = +min.value ? memGb(+min.value) : "Auto";
-}
-function skinAccountOk() { const fr = STATE.active_account; return !!fr && (fr.type === "microsoft" || fr.type === "ely"); }
+function skinAccountOk() { return !!STATE.active_account && STATE.active_account.type === "microsoft"; }
 function skinOffline() { return !!STATE.active_account && STATE.active_account.type === "offline"; }
 function skinsLayoutHtml() {
   return `<div class="skins-layout">
@@ -6445,32 +6281,7 @@ async function openLocalSkins(body) {
   SK.profile = null; SK.error = null; SK.custom = null;
   body.innerHTML = skinsLayoutHtml();
   wireSkinsLayout();
-  addElyStrip();
   showLocalSkinWarning(STATE.active_account);
-}
-
-function addElyStrip() {
-  const host = $("#skin-current");
-  if (!host || $("#ely-strip")) return;
-  const strip = document.createElement("div");
-  strip.id = "ely-strip";
-  strip.className = "ely-strip";
-  strip.innerHTML = `<input class="input" id="ely-nick" maxlength="16" placeholder="Ely.by username" />
-    <button class="btn small" id="ely-use">${icon("download", 13)}Use their skin</button>`;
-  host.parentNode.insertBefore(strip, host);
-  $("#ely-use").addEventListener("click", async () => {
-    const nick = $("#ely-nick").value.trim();
-    if (!nick) return;
-    const btn = $("#ely-use");
-    btn.disabled = true;
-    const r = await callApi("local_use_ely", nick);
-    btn.disabled = false;
-    if (!r.success) { toast(r.error, "error"); return; }
-    toast(`Skin copied from ${nick}`);
-    loadHomeSkin(true);
-    loadSkinProfile();
-  });
-  $("#ely-nick").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#ely-use").click(); });
 }
 async function renderLocalCapes(el) {
   if (!SK.localCapes) {
@@ -7174,8 +6985,8 @@ async function setCape(id, msg) {
 }
 function settingsDraft() {
   return {
-    memory_mb: +$("#set-memory").value || 2048,
-    min_memory_mb: +$("#set-minmem").value || 0,
+    memory_mb: parseInt($("#set-memory").value, 10) || 2048,
+    min_memory_mb: parseInt($("#set-minmem").value, 10) || 0,
     java_path: $("#set-java").value.trim(),
     jvm_args: $("#set-jvm").value.trim(),
     game_width: parseInt($("#set-gw").value, 10) || 0,
@@ -7196,7 +7007,8 @@ function updateSaveBar() {
 function setFullscreenUi(on) { $("#set-fs").classList.toggle("on", on); $("#row-fs").setAttribute("aria-checked", on); }
 function fillSettingsInputs() {
   const c = STATE.settings;
-  syncMemorySliders(c.memory_mb, c.min_memory_mb || 0);
+  $("#set-memory").value = c.memory_mb;
+  $("#set-minmem").value = c.min_memory_mb || "";
   $("#set-java").value = c.java_path || "";
   $("#set-jvm").value = c.jvm_args || "";
   $("#set-gw").value = c.game_width || "";
@@ -8996,7 +8808,6 @@ function init() {
   }, 5000);
   if (window.pywebview && window.pywebview.api) _resolveApi();
   bootstrap();
-  startLiveSkins();
 }
 init();
 </script>

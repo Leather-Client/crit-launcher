@@ -2115,6 +2115,65 @@ class ProgressTracker:
             self._emit_lock.release()
 
 
+_MEM_TOTAL_MB = None
+_MEM_LOCK = threading.Lock()
+
+
+def total_system_memory_mb() -> int:
+    """Physical RAM in MB, or 0 when it can't be determined."""
+    global _MEM_TOTAL_MB
+    with _MEM_LOCK:
+        if _MEM_TOTAL_MB is not None:
+            return _MEM_TOTAL_MB
+    total = 0
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                total = int(stat.ullTotalPhys // (1024 * 1024))
+        elif current_os_name() == "osx":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
+                                 timeout=5, creationflags=CREATE_NO_WINDOW)
+            total = int(out.stdout.decode().strip()) // (1024 * 1024)
+        else:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1]) // 1024
+                    break
+    except Exception:
+        total = 0
+    if total > 0:
+        with _MEM_LOCK:
+            _MEM_TOTAL_MB = total
+    return total
+
+
+def memory_ceiling_mb() -> int:
+    """Most a Minecraft instance should be given: about half of physical RAM."""
+    total = total_system_memory_mb()
+    if total <= 0:
+        return 32768
+    return max(1024, int(total * 0.5))
+
+
+def clamp_memory_mb(value) -> int:
+    mb = int(value)
+    return max(512, min(mb, memory_ceiling_mb()))
+
+
 def maven_to_path(name: str) -> str:
     parts = name.split(":")
     group, artifact, version = parts[0], parts[1], parts[2]
@@ -5801,6 +5860,8 @@ class API(ServerMixin):
             "installing": runtime["installing"],
             "playtime_total": runtime["playtime_total"],
             "playtime_days": runtime["playtime_days"],
+            "memory_total_mb": total_system_memory_mb(),
+            "memory_ceiling_mb": memory_ceiling_mb(),
             "settings": {
                 "memory_mb": int(settings.get("memory_mb", 2048)),
                 "min_memory_mb": int(settings.get("min_memory_mb") or 0),
@@ -7575,7 +7636,7 @@ class API(ServerMixin):
                 return {"success": False, "error": f"Java {major} was not found."}
 
             settings = settings_store.read()
-            memory_mb = int(settings.get("memory_mb", 2048))
+            memory_mb = clamp_memory_mb(settings.get("memory_mb", 2048))
             command = build_launch_command(meta, account, memory_mb, console_java(java_path), settings)
             game_dir = instance_game_dir(instance_name)
             ensure_game_layout(instance_name, meta.get("loader", "vanilla"))
@@ -8029,7 +8090,7 @@ class API(ServerMixin):
                 if "memory_mb" in patch:
                     try:
                         mb = int(patch["memory_mb"])
-                        settings["memory_mb"] = max(512, min(mb, 32768))
+                        settings["memory_mb"] = clamp_memory_mb(mb)
                     except (TypeError, ValueError):
                         pass
                 if "java_path" in patch:

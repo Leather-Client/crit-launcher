@@ -12,7 +12,7 @@ we are not affiliated with fabric forge or neoforge
 
 we are not affiliated with mcdonalds or burger king
 
-the themes which aim to replicate other launchers are completely custom built, no original or decompiled code was used for their creation therefore are completly unrelated, if you are fastclient or modrinth kindly create a support ticket in the discord server for any requests
+the themes which aim to replicate other launchers are completely custom built, no original or decompiled code was used for their creation therefore are completly unrelated, if you are fastclient or modrinth kindly create a support ticket in the discord server for any requests.
 </details>
 
 ## compilation 

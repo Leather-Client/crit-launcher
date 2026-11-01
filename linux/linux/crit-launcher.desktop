@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Crit Launcher
+Comment=Open source Minecraft launcher
+Exec=AppRun
+Icon=crit-launcher
+Terminal=false
+Categories=Game;
+StartupWMClass=crit

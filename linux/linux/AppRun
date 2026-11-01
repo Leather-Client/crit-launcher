@@ -1,0 +1,9 @@
+#!/bin/sh
+# Entry point inside the AppImage.
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# Qt picks Wayland automatically when WAYLAND_DISPLAY is set. If the window misbehaves,
+# run with QT_QPA_PLATFORM=xcb to force XWayland/X11.
+# If QtWebEngine fails to start because the Chromium sandbox is blocked (for example by
+# AppArmor on Ubuntu 24.04), run with QTWEBENGINE_DISABLE_SANDBOX=1.
+exec "$HERE/usr/lib/crit/crit" "$@"

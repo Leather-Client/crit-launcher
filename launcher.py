@@ -3599,7 +3599,7 @@ PUBLIC_SERVERS = (
     ("6b6t.org", "6b6t", "North America", ("anarchy",), False, False),
     ("endcrystal.me", "EndCrystal", "North America", ("anarchy", "pvp"), False, False),
 )
-APP_VERSION = "1.7"
+APP_VERSION = "1.7.1"
 
 
 def _version_tuple(tag) -> tuple:

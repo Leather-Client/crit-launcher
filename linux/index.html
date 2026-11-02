@@ -6352,7 +6352,8 @@ function renderContentList(animate) {
     const BAD_MODS = { fabric: ["forge", "neoforge"], forge: ["fabric", "quilt", "neoforge"], neoforge: ["fabric", "quilt", "forge"] };
     const mismatch = CV.kind === "mods" && (BAD_MODS[CV.loader] || []).includes(i.loader);
     const idn = CV.kind === "mods" && CV.ident ? CV.ident[i.file] : null;
-    const acts = idn ? `<button type="button" class="cr-act link" data-link="${n}" data-tip="Open on Modrinth" aria-label="Open ${esc(i.name)} on Modrinth">${icon("external-link", 16)}</button>
+    const site = idn && idn.source === "curseforge" ? "CurseForge" : "Modrinth";
+    const acts = idn ? `${idn.link ? `<button type="button" class="cr-act link" data-link="${n}" data-tip="Open on ${site}" aria-label="Open ${esc(i.name)} on ${site}">${icon("external-link", 16)}</button>` : ""}
       <button type="button" class="cr-act vers" data-vers="${n}" data-tip="Change version" aria-label="Change version of ${esc(i.name)}">${icon("arrow-up-down", 16)}</button>` : "";
     return `<div class="cv-row${i.enabled ? "" : " off"}${idn ? " has-acts" : ""}" data-i="${n}">
       <div class="cr-icon">${icon(fallback, 20)}</div>

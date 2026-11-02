@@ -249,6 +249,14 @@ def http_get_json(url: str, timeout: int = 20, retries: int = 2):
     raise last
 
 
+def http_post_json(url: str, payload, timeout: int = 30):
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "User-Agent": USER_AGENT, "Accept": "application/json", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def http_get_text(url: str, timeout: int = 30) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -4824,6 +4832,19 @@ def list_instance_content(instance_name: str, kind: str) -> list:
     return items
 
 
+_MOD_HASH_CACHE = {}
+
+
+def _mod_hash(path: Path) -> str:
+    """SHA-1 of a mod file, remembered until the file's size or modification time changes."""
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    digest = _MOD_HASH_CACHE.get(key)
+    if digest is None:
+        digest = _MOD_HASH_CACHE[key] = file_sha1(path)
+    return digest
+
+
 def read_content_icon(instance_name: str, kind: str, filename: str):
     if kind == "shaderpacks":
         return None
@@ -6911,6 +6932,146 @@ class API(ServerMixin):
             return {"success": True, "icon": read_content_icon(instance_name, kind, filename)}
         except Exception:
             return {"success": True, "icon": None}
+
+    # ---- identifying installed mods and switching their version (Modrinth) ----
+
+    def identify_mods(self, instance_name):
+        """Match the instance's mod files to Modrinth projects by file hash.
+
+        Returns {"mods": {filename: {project_id, title, slug, link, version_id, version_number,
+        version_type}}}. Mods Modrinth doesn't know (or that came from CurseForge) are left out.
+        """
+        try:
+            if not read_instance_meta(instance_name):
+                return {"success": False, "error": "Instance not found."}
+            folder = instance_mods_dir(instance_name)
+            if not folder.is_dir():
+                return {"success": True, "mods": {}}
+            by_hash = {}
+            for p in folder.iterdir():
+                low = p.name.lower()
+                if p.is_file() and (low.endswith(".jar") or low.endswith(".jar.disabled")):
+                    by_hash.setdefault(_mod_hash(p), []).append(p.name)
+            if not by_hash:
+                return {"success": True, "mods": {}}
+            found = http_post_json(f"{MODRINTH_API}/version_files",
+                                   {"hashes": list(by_hash), "algorithm": "sha1"}) or {}
+            project_ids = sorted({v.get("project_id") for v in found.values() if v.get("project_id")})
+            projects = {}
+            for i in range(0, len(project_ids), 100):
+                chunk = project_ids[i:i + 100]
+                url = f"{MODRINTH_API}/projects?ids=" + urllib.parse.quote(json.dumps(chunk))
+                for proj in http_get_json(url) or []:
+                    projects[proj.get("id")] = proj
+            mods = {}
+            for digest, version in found.items():
+                proj = projects.get(version.get("project_id")) or {}
+                slug = proj.get("slug") or version.get("project_id")
+                kind = proj.get("project_type") or "mod"
+                for name in by_hash.get(digest, []):
+                    mods[name] = {
+                        "project_id": version.get("project_id"),
+                        "title": proj.get("title"),
+                        "slug": slug,
+                        "link": f"https://modrinth.com/{kind}/{slug}",
+                        "version_id": version.get("id"),
+                        "version_number": version.get("version_number"),
+                        "version_type": version.get("version_type"),
+                    }
+            return {"success": True, "mods": mods}
+        except Exception:
+            log_exception("identify_mods")
+            return {"success": False, "error": "Couldn't look the mods up on Modrinth."}
+
+    def get_mod_versions(self, instance_name, project_id, current_version_id=None):
+        """All published versions of one mod, each marked compatible or not with this instance."""
+        try:
+            meta = read_instance_meta(instance_name)
+            if not meta:
+                return {"success": False, "error": "Instance not found."}
+            mc, loader = meta.get("version"), meta.get("loader", "vanilla")
+            versions = http_get_json(f"{MODRINTH_API}/project/{urllib.parse.quote(str(project_id))}/version")
+            out = []
+            for v in versions or []:
+                if not v.get("id") or not v.get("files"):
+                    continue
+                ok_mc = mc in (v.get("game_versions") or [])
+                ok_loader = loader in (v.get("loaders") or [])
+                if ok_mc and ok_loader:
+                    reason = ""
+                elif ok_loader:
+                    reason = f"Not for Minecraft {mc}"
+                elif ok_mc:
+                    reason = f"Not for {LOADER_NICE.get(loader, loader)}"
+                else:
+                    reason = f"Not for {LOADER_NICE.get(loader, loader)} {mc}"
+                out.append({
+                    "id": str(v["id"]),
+                    "name": str(v.get("name") or v.get("version_number") or v["id"]),
+                    "number": str(v.get("version_number") or ""),
+                    "type": str(v.get("version_type") or "release"),
+                    "date": v.get("date_published"),
+                    "mc": [str(g) for g in (v.get("game_versions") or [])][-4:],
+                    "loaders": [str(g) for g in (v.get("loaders") or [])],
+                    "compatible": ok_mc and ok_loader,
+                    "reason": reason,
+                    "current": str(v["id"]) == str(current_version_id or ""),
+                })
+            out.sort(key=lambda v: str(v.get("date") or ""), reverse=True)
+            return {"success": True, "versions": out[:150], "total": len(out),
+                    "minecraft": mc, "loader": loader}
+        except Exception:
+            log_exception("get_mod_versions")
+            return {"success": False, "error": "Couldn't load this mod's versions."}
+
+    def switch_mod_version(self, instance_name, filename, project_id, version_id, allow_incompatible=False):
+        """Replace one installed mod file with another version of the same Modrinth project.
+
+        The new file is downloaded and verified first and the old one is removed only after that,
+        so a failed switch leaves the old version in place. A disabled mod stays disabled.
+        Required dependencies of the new version are not installed.
+        """
+        try:
+            meta = read_instance_meta(instance_name)
+            if not meta:
+                return {"success": False, "error": "Instance not found."}
+            with self._proc_lock:
+                if instance_name in self._processes:
+                    return {"success": False, "error": "Close the game first - its files are in use."}
+            folder = instance_mods_dir(instance_name)
+            old_name = Path(str(filename or "")).name
+            old_path = folder / old_name
+            if not old_name or not old_path.is_file() or not is_within(folder, old_path):
+                return {"success": False, "error": "That mod file no longer exists."}
+            version = http_get_json(f"{MODRINTH_API}/version/{urllib.parse.quote(str(version_id))}")
+            if str(version.get("project_id")) != str(project_id):
+                return {"success": False, "error": "That version belongs to a different mod."}
+            mc, loader = meta.get("version"), meta.get("loader", "vanilla")
+            compatible = mc in (version.get("game_versions") or []) and loader in (version.get("loaders") or [])
+            if not compatible and not allow_incompatible:
+                return {"success": False, "incompatible": True,
+                        "error": "That version isn't made for this instance."}
+            was_disabled = old_name.lower().endswith(".disabled")
+            file_info = primary_file(version)
+            if not file_info:
+                return {"success": False, "error": "That version has no downloadable file."}
+            new_name = Path(file_info["filename"]).name
+            if not new_name.lower().endswith(".jar"):
+                return {"success": False, "error": "That version isn't a mod .jar file."}
+            final_name = new_name + (".disabled" if was_disabled else "")
+            dest = folder / final_name
+            if not is_within(folder, dest):
+                return {"success": False, "error": "Unsafe file name in mod."}
+            http_download(file_info["url"], dest, file_info.get("size"),
+                          (file_info.get("hashes") or {}).get("sha1"))
+            if old_path != dest and old_path.exists():
+                old_path.unlink()
+            return {"success": True, "file": final_name, "old": old_name}
+        except PermissionError:
+            return {"success": False, "error": "Couldn't replace it - another program is using the file."}
+        except Exception as exc:
+            log_exception("switch_mod_version")
+            return {"success": False, "error": f"Couldn't switch the mod version: {exc}"}
 
 
     def _make_instance(self, name, version, loader, loader_version):

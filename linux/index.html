@@ -2306,6 +2306,22 @@ input[type=range].input::-moz-range-thumb { width: 14px; height: 14px; border-ra
 .cv-row:hover .cr-del, .cr-del:focus-visible, .cr-del.armed { opacity: 1; transform: translateY(-50%) scale(1); }
 .cr-del:hover { color: var(--danger, #f87171); border-color: rgba(248, 113, 113, 0.5); background: rgba(248, 113, 113, 0.12); }
 .cr-del.armed { background: var(--danger, #ef4444); border-color: transparent; color: #fff; }
+.cr-act { position: absolute; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; color: var(--dim); background: var(--panel-3, rgba(255, 255, 255, 0.08)); border: 1px solid var(--border); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+.cr-act.vers { right: 52px; }
+.cr-act.link { right: 92px; }
+.cr-act:hover, .cr-act:focus-visible { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.cv-row.has-acts .cr-body { padding-right: 132px; }
+.tag.bad { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
+.cv-vhead { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.cv-vhead .cv-vtitle { font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-vnote { color: var(--faint); font-size: 12px; margin: 0 0 10px; }
+.cv-vnote a { color: var(--accent); text-decoration: none; }
+.cv-vnote a:hover { text-decoration: underline; }
+.cv-vrow { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border-soft); }
+.cv-vrow.cur { border-color: var(--accent); }
+.cv-vrow.bad { opacity: 0.75; }
+.cv-vrow .cr-body { padding-right: 0; }
+.cv-vrow .btn { flex-shrink: 0; min-width: 104px; justify-content: center; }
 
 :root[data-style="sklauncher"] #mr-lib { grid-template-columns: repeat(auto-fill, minmax(max(340px, calc(50% - 7px)), 1fr)); gap: 14px; align-items: stretch; }
 :root[data-style="sklauncher"] .mr-card.ski-card.gal { padding: 0; gap: 0; overflow: hidden; border-radius: 13px; background: #131314; border: 1px solid #222226; }
@@ -6188,7 +6204,95 @@ async function openContent(name) {
   loadContent();
 }
 let cvArmTimer = 0;
+// ---- version picker for one installed mod ----
+function cvTypeTag(type) {
+  return type === "alpha" ? `<span class="tag warn">Alpha</span>` : type === "beta" ? `<span class="tag warn">Beta</span>` : "";
+}
+async function cvOpenVersions(it) {
+  const idn = CV && CV.ident && CV.ident[it.file]; if (!idn) return;
+  const token = ++CV.token;
+  CV.view = { item: it, idn, versions: null, compatOnly: false, error: "" };
+  $(".cv-bar").style.display = "none"; $("#cv-count").textContent = "";
+  $("#cv-list").innerHTML = `<div class="loading-row"><span class="ico spin">${icon("loader", 18)}</span>Loading versions...</div>`;
+  const r = await callApi("get_mod_versions", CV.name, idn.project_id, idn.version_id);
+  if (!CV || CV.token !== token || !CV.view) return;
+  if (!r.success) CV.view.error = r.error || "Couldn't load versions.";
+  else { CV.view.versions = r.versions; CV.view.total = r.total; CV.view.mc = r.minecraft; CV.view.loader = r.loader; }
+  cvRenderVersions();
+}
+function cvBack() {
+  if (!CV || modalBusy) return;
+  CV.view = null; CV.token++;
+  $(".cv-bar").style.display = "";
+  renderContentList(false);
+  cvIdentify();
+}
+function cvRenderVersions() {
+  const V = CV && CV.view, list = $("#cv-list"); if (!V || !list) return;
+  const head = `<div class="cv-vhead"><button type="button" class="btn small icon-only" id="cv-back" data-tip="Back to the list" aria-label="Back">${icon("chevron-left", 16)}</button>
+      <div class="cv-vtitle">${esc(V.idn.title || V.item.name)}</div>
+      <span class="cr-ver">installed ${esc(V.idn.version_number || V.item.version || "")}</span></div>`;
+  if (V.error || !V.versions) {
+    list.innerHTML = head + `<div class="empty">${icon("alert", 28)}<div>${esc(V.error || "No versions found.")}</div></div>`;
+    $("#cv-back").addEventListener("click", cvBack); return;
+  }
+  const vers = V.versions.filter((v) => !V.compatOnly || v.compatible)
+    .map((v, i) => [v, i]).sort((a, b) => (b[0].compatible - a[0].compatible) || (a[1] - b[1])).map((x) => x[0]);
+  V.shown = vers;
+  const nCompat = V.versions.filter((v) => v.compatible).length;
+  const note = V.total > V.versions.length
+    ? `${nCompat} versions compatible with ${loaderNice(V.loader)} ${esc(V.mc)} among the newest ${V.versions.length} of ${V.total}`
+    : `${nCompat} of ${V.total} versions compatible with ${loaderNice(V.loader)} ${esc(V.mc)}`;
+  list.innerHTML = head + `<div class="cv-vnote">${note} · <a href="#" id="cv-vfilter">${V.compatOnly ? "Show all versions" : "Show compatible only"}</a></div>` +
+    (vers.length ? vers.map((v, n) => {
+      const cur = v.current, risky = !v.compatible || v.type === "alpha";
+      const compTag = v.compatible ? `<span class="tag ok">Compatible</span>` : `<span class="tag bad">${esc(v.reason || "Incompatible")}</span>`;
+      const sub = [v.name !== v.number ? v.name : "", v.mc.length ? "MC " + v.mc.join(", ") : "",
+        v.date ? new Date(v.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : ""].filter(Boolean).join(" · ");
+      return `<div class="cv-vrow${cur ? " cur" : ""}${v.compatible ? "" : " bad"}" data-v="${n}">
+        <div class="cr-body"><div class="cr-name"><span class="cr-title">${esc(v.number || v.name)}</span>
+          ${cur ? `<span class="tag ok">Installed</span>` : ""}${cvTypeTag(v.type)}${compTag}</div>
+          <div class="cr-file">${esc(sub)}</div></div>
+        <button type="button" class="btn small${risky && !cur ? " danger" : ""}" data-sw="${n}"${cur ? " disabled" : ""}>${cur ? "Installed" : "Switch"}</button></div>`;
+    }).join("") : `<div class="empty">${icon("search", 28)}<div>No compatible versions of this mod.</div></div>`);
+  $("#cv-back").addEventListener("click", cvBack);
+  $("#cv-vfilter").addEventListener("click", (e) => { e.preventDefault(); V.compatOnly = !V.compatOnly; cvRenderVersions(); });
+}
+let cvSwArm = 0;
+async function cvSwitch(btn) {
+  const V = CV && CV.view; if (!V || modalBusy) return;
+  const v = V.shown[+btn.dataset.sw]; if (!v || v.current) return;
+  const risky = !v.compatible || v.type === "alpha";
+  if (risky && !btn.classList.contains("armed")) {
+    $$("#cv-list [data-sw].armed").forEach((x) => { x.classList.remove("armed"); x.textContent = "Switch"; });
+    btn.classList.add("armed"); btn.textContent = v.compatible ? "Use alpha?" : "Install anyway?";
+    clearTimeout(cvSwArm); cvSwArm = setTimeout(() => { if (btn.isConnected) { btn.classList.remove("armed"); btn.textContent = "Switch"; } }, 3500);
+    return;
+  }
+  clearTimeout(cvSwArm);
+  modalBusy = true;
+  $$("#cv-list button").forEach((x) => (x.disabled = true));
+  btn.textContent = "Installing...";
+  const r = await callApi("switch_mod_version", CV ? CV.name : "", V.item.file, V.idn.project_id, v.id, !v.compatible);
+  modalBusy = false;
+  if (!CV || !CV.view) return;
+  if (!r || !r.success) { toast((r && r.error) || "Couldn't switch the version.", "error"); cvRenderVersions(); return; }
+  toast(`${V.idn.title || V.item.name} is now ${v.number || v.name}`);
+  CV.view = null; CV.ident = null; CV.token++;
+  $(".cv-bar").style.display = "";
+  loadContent();
+}
 async function cvOnClick(e) {
+  const sw = e.target.closest("[data-sw]"); if (sw && CV && CV.view) { e.stopPropagation(); cvSwitch(sw); return; }
+  const lk = e.target.closest("[data-link]");
+  if (lk && CV) {
+    e.stopPropagation();
+    const it = CV.visible[+lk.dataset.link], idn = it && CV.ident && CV.ident[it.file];
+    if (idn && idn.link) callApi("open_url", idn.link);
+    return;
+  }
+  const vb = e.target.closest("[data-vers]");
+  if (vb && CV) { e.stopPropagation(); const it = CV.visible[+vb.dataset.vers]; if (it) cvOpenVersions(it); return; }
   const b = e.target.closest("[data-del]"); if (!b || !CV) return;
   e.stopPropagation();
   const it = CV.visible[+b.dataset.del]; if (!it) return;
@@ -6218,6 +6322,17 @@ async function loadContent() {
   if (!r.success) { $("#cv-list").innerHTML = `<div class="empty">${icon("alert", 28)}<div>${esc(r.error)}</div></div>`; return; }
   CV.items = r.items;
   renderContentList(true);
+  cvIdentify();
+}
+// Match the installed mods to Modrinth projects (by file hash) so each row can show a link and
+// a version picker. Mods Modrinth doesn't know simply get no extra buttons.
+async function cvIdentify() {
+  if (!CV || CV.kind !== "mods" || !CV.items.length) return;
+  const token = CV.token, name = CV.name;
+  const r = await callApi("identify_mods", name);
+  if (!CV || CV.token !== token || CV.name !== name || CV.view) return;
+  CV.ident = r && r.success ? r.mods : {};
+  renderContentList(false);
 }
 function loaderNice(l) { return { fabric: "Fabric", quilt: "Quilt", forge: "Forge", neoforge: "NeoForge", horizon: "Horizon", unknown: "Unknown" }[l] || "Other"; }
 function renderContentList(animate) {
@@ -6236,14 +6351,18 @@ function renderContentList(animate) {
   list.innerHTML = CV.visible.map((i, n) => {
     const BAD_MODS = { fabric: ["forge", "neoforge"], forge: ["fabric", "quilt", "neoforge"], neoforge: ["fabric", "quilt", "forge"] };
     const mismatch = CV.kind === "mods" && (BAD_MODS[CV.loader] || []).includes(i.loader);
-    return `<div class="cv-row${i.enabled ? "" : " off"}" data-i="${n}">
+    const idn = CV.kind === "mods" && CV.ident ? CV.ident[i.file] : null;
+    const acts = idn ? `<button type="button" class="cr-act link" data-link="${n}" data-tip="Open on Modrinth" aria-label="Open ${esc(i.name)} on Modrinth">${icon("external-link", 16)}</button>
+      <button type="button" class="cr-act vers" data-vers="${n}" data-tip="Change version" aria-label="Change version of ${esc(i.name)}">${icon("arrow-up-down", 16)}</button>` : "";
+    return `<div class="cv-row${i.enabled ? "" : " off"}${idn ? " has-acts" : ""}" data-i="${n}">
       <div class="cr-icon">${icon(fallback, 20)}</div>
       <div class="cr-body">
         <div class="cr-name"><span class="cr-title">${esc(i.name)}</span>${i.version ? `<span class="cr-ver">${esc(i.version)}</span>` : ""}
-          ${!i.enabled ? `<span class="tag">Disabled</span>` : ""}${mismatch ? `<span class="tag warn">${loaderNice(i.loader)} mod</span>` : ""}</div>
+          ${!i.enabled ? `<span class="tag">Disabled</span>` : ""}${mismatch ? `<span class="tag warn">${loaderNice(i.loader)} mod</span>` : ""}${idn && idn.version_type && idn.version_type !== "release" ? `<span class="tag warn">${esc(idn.version_type)}</span>` : ""}</div>
         ${i.description ? `<div class="cr-desc">${esc(i.description)}</div>` : ""}
         <div class="cr-file">${i.authors ? `by ${esc(i.authors)} · ` : ""}${esc(i.file)}</div>
       </div>
+      ${acts}
       <button type="button" class="cr-del" data-del="${n}" data-tip="Delete" aria-label="Delete ${esc(i.name)}">${icon("trash", 16)}</button></div>`;
   }).join("");
   if (animate) stagger(list);

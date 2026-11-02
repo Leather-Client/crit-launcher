@@ -307,6 +307,20 @@ h1 { font-size: 22px; font-weight: 680; margin-bottom: 4px; }
 .launch-split .btn.launch-main:hover { flex: 3 1 0; min-width: 0; height: 100%; border: 0; border-radius: 0; box-shadow: none; padding: 0 14px; justify-content: center; }
 .launch-split .btn.launch-main:hover:not([disabled]) { background-color: var(--accent-hover); }
 .launch-split .btn.launch-main:active { transform: none; filter: brightness(0.94); }
+.launch-split { position: relative; }
+.launch-split::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 45%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  transform: translateX(-120%); opacity: 0; pointer-events: none;
+}
+.launch-split.launching { transform: none; box-shadow: 0 8px 20px -14px rgba(var(--accent-rgb), 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.launch-split.launching .btn.launch-main { cursor: progress; filter: brightness(0.96); }
+.launch-split.launching::after { opacity: 1; animation: launch-sheen 1.2s linear infinite; }
+:root[data-motion="reduced"] .launch-split.launching::after { animation: none; opacity: 0; }
+@keyframes launch-sheen {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(320%); }
+}
 .home-launch-text { display: flex; flex-direction: column; align-items: center; min-width: 0; line-height: 1.1; }
 .home-launch-text .main {
   display: block;
@@ -3095,6 +3109,9 @@ input[type=range].input::-moz-range-thumb { width: 14px; height: 14px; border-ra
           <button type="button" class="st-toggle" id="row-bgpat" role="switch" aria-checked="true">
             <span><span class="t" style="display:block">Background pattern</span><span class="d" style="display:block">Show the faint pattern behind the pages.</span></span>
             <span class="switch on" id="set-bgpat"></span></button>
+          <button type="button" class="st-toggle" id="row-rpc" role="switch" aria-checked="false">
+            <span><span class="t" style="display:block">Discord status</span><span class="d" style="display:block">Show "Playing Crit Launcher" on your Discord profile.</span></span>
+            <span class="switch" id="set-rpc"></span></button>
         </div>
         </section>
         <section class="st-pane" id="st-pane-credits" role="tabpanel">
@@ -4076,6 +4093,12 @@ function applyBgPattern(on, persist) {
 try { applyMotion(localStorage.getItem("crit-reduce-motion") === "1", false); applyBgPattern(localStorage.getItem("crit-bg-pattern") !== "0", false); } catch (e) {}
 $("#row-motion").addEventListener("click", () => applyMotion(!$("#set-motion").classList.contains("on"), true));
 $("#row-bgpat").addEventListener("click", () => applyBgPattern(!$("#set-bgpat").classList.contains("on"), true));
+function applyPresence(on, persist) {
+  const sw = $("#set-rpc"); if (sw) sw.classList.toggle("on", on);
+  const row = $("#row-rpc"); if (row) row.setAttribute("aria-checked", on);
+  if (persist) { STATE.settings.discord_presence = on; callApi("save_settings", { discord_presence: on }); }
+}
+$("#row-rpc").addEventListener("click", () => applyPresence(!$("#set-rpc").classList.contains("on"), true));
 let sidebarSelect, launchSelect;
 function applyCompact(compact, persist) {
   document.body.classList.toggle("compact", compact);
@@ -4144,7 +4167,6 @@ function liveNames() {
 }
 
 function cropHead(img) {
-  // the bridge hands over a whole 64x64 skin sheet, avatars want the head
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
   if (w < 64 || h < 32) return img;
   const cv = document.createElement("canvas");
@@ -4824,11 +4846,32 @@ async function instanceIconPng(name) {
 
 async function launchInstance(name) {
   hideBanner();
+  LAUNCH_PENDING = name;
+  pressLaunch(true);
+  clearTimeout(LAUNCH_TIMER);
+  LAUNCH_TIMER = setTimeout(() => { LAUNCH_PENDING = null; pressLaunch(false); }, 60000);
   const r = await callApi("launch", name);
-  if (!r.success) { toast(r.error || "Couldn't launch.", "error"); showBanner(r.error); return; }
+  if (!r.success) {
+    LAUNCH_PENDING = null; clearTimeout(LAUNCH_TIMER); pressLaunch(false);
+    toast(r.error || "Couldn't launch.", "error"); showBanner(r.error);
+    return;
+  }
   markPlayed(name);
-  if (r.installing) toast(`Preparing ${name}...`);
+  if (r.installing) { settleLaunch(); toast(`Preparing ${name}...`); }
   else toast(`Launching ${name}...`);
+}
+function settleLaunch() {
+  if (!LAUNCH_PENDING) return;
+  if (STATE.running && STATE.running.includes(LAUNCH_PENDING)) {
+    LAUNCH_PENDING = null; clearTimeout(LAUNCH_TIMER); pressLaunch(false);
+  }
+}
+let LAUNCH_PENDING = null, LAUNCH_TIMER = 0;
+function pressLaunch(on) {
+  const btn = $("#btn-home-play");
+  if (btn) btn.disabled = on;
+  const split = $(".launch-split");
+  if (split) split.classList.toggle("launching", on);
 }
 function showBanner(msg) { $("#banner-msg").textContent = msg || "Something went wrong."; $("#instances-banner").classList.add("show"); }
 function hideBanner() { $("#instances-banner").classList.remove("show"); }
@@ -6325,7 +6368,6 @@ function syncMemorySliders(maxMb, minMb) {
 }
 
 function fillTrack(el) {
-  // the filled part of the track only spans between the two thumb centres
   const lo = +el.min || 0, hi = +el.max || 100;
   const frac = hi > lo ? (+el.value - lo) / (hi - lo) : 0;
   el.style.setProperty("--pct", (frac * 100).toFixed(2) + "%");
@@ -7301,6 +7343,7 @@ window.__critEvent = function (name, data) {
     case "stateChanged":
       STATE = data;
       renderAll();
+      settleLaunch();
       break;
     case "installStarted":
       PROGRESS = { instance: data.instance, title: data.title, percent: 0, current: "Preparing", unit: "bytes", downloaded: 0, total: 1 };
@@ -7321,6 +7364,7 @@ window.__critEvent = function (name, data) {
       break;
     case "launchError":
       toast(data.message || "The game closed unexpectedly.", "error"); showBanner(data.message);
+      LAUNCH_PENDING = null; clearTimeout(LAUNCH_TIMER); pressLaunch(false);
       break;
     case "mcLoginStatus":
       if ($("#wl-status-text")) $("#wl-status-text").textContent = data.status || "Working...";
@@ -8926,6 +8970,7 @@ async function bootstrap() {
   if (/^#[0-9a-f]{6}$/i.test(STATE.settings.custom_accent || "")) { CUSTOM_HEX = STATE.settings.custom_accent.toLowerCase(); try { localStorage.setItem("crit-custom-accent", CUSTOM_HEX); } catch (e) {} }
   applyCompact(true, false); applyTheme(STATE.settings.theme || "green", false);
   applyMotion(!!STATE.settings.reduce_motion, false); applyBgPattern(STATE.settings.bg_pattern !== false, false);
+  applyPresence(!!STATE.settings.discord_presence, false);
   cpInit(); applyStyle(STATE.settings.ui_style || "default", false); applyMode(STATE.settings.color_mode || "dark", false);
   FCA.view = STATE.settings.addon_view === "installed" ? "installed" : "browse"; FCA.inst = STATE.settings.addon_instance || null; fcApplyView();
   addonSource = STATE.settings.addon_source === "curseforge" ? "curseforge" : "modrinth"; syncAddonSource();

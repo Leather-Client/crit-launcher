@@ -17,6 +17,7 @@ import subprocess
 import tarfile
 import threading
 import traceback
+import atexit
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -38,6 +39,11 @@ def _app_dir() -> Path:
 
 RESOURCE_DIR = _resource_dir()
 APP_DIR = _app_dir()
+
+for _helper_dir in (APP_DIR, APP_DIR.parent):
+    if (_helper_dir / "discord_rpc.py").is_file() and str(_helper_dir) not in sys.path:
+        sys.path.insert(0, str(_helper_dir))
+        break
 
 DATA_DIR = Path(os.environ.get("CRIT_LAUNCHER_DATA", str(APP_DIR / "launcher_data")))
 INSTANCES_DIR = DATA_DIR / "instances"
@@ -170,6 +176,9 @@ RESOURCES_BASE_URL = "https://resources.download.minecraft.net"
 LIBRARIES_BASE_URL = "https://libraries.minecraft.net/"
 
 USER_AGENT = "CritLauncher/1.0 (+https://critlauncher.xyz)"
+
+DISCORD_CLIENT_ID = "1566575742307934349"
+DISCORD_ASSETS_URL = "https://discord.com/api/v9/oauth2/applications/%s/assets" % DISCORD_CLIENT_ID
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -740,6 +749,7 @@ DEFAULT_SETTINGS = {
     "custom_accent": "#4ade80",
     "recent_accents": [],
     "reduce_motion": False,
+    "discord_presence": False,
     "bg_pattern": True,
     "sidebar_collapsed": False,
     "theme": "green",
@@ -3651,8 +3661,22 @@ class AuthError(Exception):
     pass
 
 
+def _jwt_expired(token):
+    """True/False for a readable token, None when it cannot be parsed."""
+    try:
+        body = token.split(".")[1]
+        body += "=" * (-len(body) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(body))
+        exp = claims.get("exp")
+        return None if exp is None else float(exp) <= time.time() + 60
+    except Exception:
+        return None
+
+
 def ensure_fresh_account(account: dict) -> dict:
     if account.get("type") == "ely":
+        if account.get("mc_token") and _jwt_expired(account["mc_token"]) is False:
+            return account
         return refresh_ely_account(account)
     if account.get("type") != "microsoft":
         return account
@@ -3822,7 +3846,6 @@ def ely_sign_in(username: str, password: str, totp: str = "") -> dict:
     try:
         status, data = ely_post(ELY_AUTH, payload)
     except Exception:
-        # traceback would include the frame holding the plaintext password
         raise AuthError("Couldn't reach Ely.by. Check your connection.") from None
     message = (data or {}).get("errorMessage") or (data or {}).get("error") or ""
     if status == 401 and "two factor" in message.lower():
@@ -3936,7 +3959,6 @@ def authlib_injector() -> Path | None:
 
     for attempt in range(2):
         try:
-            # the asset name carries the version, so ask GitHub which one it is
             release = http_get_json(ELY_INJECTOR_API, timeout=20, retries=0)
             asset = next((a for a in release.get("assets", [])
                           if (a.get("name") or "").endswith(".jar")), None)
@@ -5904,6 +5926,17 @@ class ServerMixin:
         return {"success": True, "files": [self._download_version_file(version, dest)], "note": note}
 
 
+def _discord_asset():
+    """Discord keeps the size suffix on upload, so ask which name exists."""
+    try:
+        for item in http_get_json(DISCORD_ASSETS_URL, timeout=3, retries=0) or []:
+            if item.get("name") == "crit":
+                return "crit"
+        return "crit-1024"
+    except Exception:
+        return "crit"
+
+
 class API(ServerMixin):
     def __init__(self):
         self._window = None
@@ -5916,6 +5949,9 @@ class API(ServerMixin):
         self._web_login = None
         self._proc_lock = threading.Lock()
         self._launcher_started = time.time()
+        self._presence = None
+        self._presence_starting = False
+        self._presence_lock = threading.Lock()
         self._srv_init()
 
     def set_window(self, window):
@@ -6011,6 +6047,7 @@ class API(ServerMixin):
                 "custom_accent": _clean_hex(settings.get("custom_accent")),
                 "recent_accents": [_clean_hex(x) for x in (settings.get("recent_accents") or []) if _clean_hex(x, None)][:10],
                 "reduce_motion": bool(settings.get("reduce_motion", False)),
+                "discord_presence": bool(settings.get("discord_presence", False)),
                 "bg_pattern": bool(settings.get("bg_pattern", True)),
                 "sidebar_collapsed": bool(settings.get("sidebar_collapsed", False)),
                 "theme": settings.get("theme", "green") if settings.get("theme") in THEMES else "green",
@@ -6544,7 +6581,6 @@ class API(ServerMixin):
             if not skin:
                 return {"success": False, "error": f"Ely.by has no skin for {source}."}
 
-            # keep a copy either way, so it applies once CustomSkinLoader shows up
             png = decode_png_uri(skin["image"])
             _write_bytes_atomic(SKINS_DIR / f"{username}.png", png)
             settings_store.update(lambda s: s.__setitem__("local_ely_source", source))
@@ -7638,16 +7674,34 @@ class API(ServerMixin):
                 active_account = accounts[0]
             if not active_account:
                 return {"success": False, "error": "Please add an account first."}
-            try:
-                active_account = ensure_fresh_account(active_account)
-            except AuthError as exc:
-                return {"success": False, "error": str(exc)}
-
             needs_install = not is_installed(meta)
             if not needs_install:
                 java_path = resolve_java(java_info_from_meta(meta), allow_download=False)
                 if java_path:
-                    return self._do_launch(instance_name, meta, active_account, java_path)
+                    with self._proc_lock:
+                        self._installing.add(instance_name)
+
+                    def go():
+                        try:
+                            try:
+                                fresh = ensure_fresh_account(active_account)
+                            except AuthError as exc:
+                                self.emit("launchError", {"instance": instance_name,
+                                                          "message": str(exc)})
+                                return
+                            result = self._do_launch(instance_name, meta, fresh, java_path)
+                            if not result.get("success"):
+                                self.emit("launchError", {"instance": instance_name,
+                                                          "message": result.get("error", "Failed to launch.")})
+                        except Exception:
+                            log_exception("launch")
+                            self.emit("launchError", {"instance": instance_name,
+                                                      "message": "Failed to launch Minecraft."})
+                        finally:
+                            with self._proc_lock:
+                                self._installing.discard(instance_name)
+                    threading.Thread(target=go, daemon=True).start()
+                    return {"success": True}
 
             with self._proc_lock:
                 self._installing.add(instance_name)
@@ -8261,6 +8315,41 @@ class API(ServerMixin):
             log_exception("window_drag")
             return {"success": False}
 
+    def _presence_sync_off(self):
+        with self._presence_lock:
+            presence, self._presence = self._presence, None
+        if presence is not None:
+            try:
+                presence.stop()
+            except Exception:
+                pass
+
+    def _presence_sync(self):
+        wanted = bool(settings_store.read().get("discord_presence", False))
+        if wanted and self._presence is None and not self._presence_starting:
+            self._presence_starting = True
+
+            def boot():
+                try:
+                    import discord_rpc
+                    presence = discord_rpc.Presence(
+                        DISCORD_CLIENT_ID, log=lambda m: logging.info("presence: %s", m))
+                    presence.start("Crit Launcher", "v" + APP_VERSION, asset=_discord_asset())
+                    with self._presence_lock:
+                        if settings_store.read().get("discord_presence", False) and self._presence is None:
+                            self._presence = presence
+                            atexit.register(self._presence_sync_off)
+                        else:
+                            presence.stop()
+                except Exception:
+                    log_exception("presence start")
+                finally:
+                    self._presence_starting = False
+
+            threading.Thread(target=boot, daemon=True).start()
+        elif not wanted and self._presence is not None:
+            self._presence_sync_off()
+
     def save_settings(self, patch: dict):
         try:
             def _apply(settings):
@@ -8294,6 +8383,8 @@ class API(ServerMixin):
                 if isinstance(patch.get("recent_accents"), list):
                     settings["recent_accents"] = [_clean_hex(x) for x in patch["recent_accents"]
                                                   if _clean_hex(x, None)][:10]
+                if "discord_presence" in patch:
+                    settings["discord_presence"] = bool(patch["discord_presence"])
                 if "reduce_motion" in patch:
                     settings["reduce_motion"] = bool(patch["reduce_motion"])
                 if "bg_pattern" in patch:
@@ -8326,6 +8417,7 @@ class API(ServerMixin):
             settings = settings_store.update(_apply)
             _JAVA_UI_CACHE["at"] = 0.0
             self.push_state()
+            self._presence_sync()
             return {"success": True, "settings": settings}
         except Exception:
             log_exception("save_settings")
@@ -8946,8 +9038,10 @@ def main():
         background_color="#0b0c0e",
     )
     api.set_window(window)
+    api._presence_sync()
 
     def on_closing():
+        api._presence_sync_off()
         try:
             api.stop_all_servers()
         except Exception:

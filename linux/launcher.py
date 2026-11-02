@@ -8830,18 +8830,74 @@ class API(ServerMixin):
                 self._installing.discard(name)
             self.push_state()
 
-    def install_modpack(self, project_id):
+    def get_modpack_versions(self, project_id):
+        """Every published version of a modpack, newest first, for the version picker.
+
+        Each entry's "id" is what install_modpack takes as version_id.
+        """
+        try:
+            out = []
+            if isinstance(project_id, str) and project_id.startswith("cf:"):
+                mod_id = _cf_number(project_id)
+                files = _cf_get(f"/mods/{mod_id}/files") or []
+                if isinstance(files, dict):
+                    files = files.get("data") or []
+                files = [f for f in files if isinstance(f, dict) and f.get("id") is not None
+                         and not f.get("isServerPack")]
+                zips = [f for f in files if str(f.get("fileName") or "").lower().endswith(".zip")]
+                files = zips or files
+                files.sort(key=lambda f: str(f.get("fileDate") or ""), reverse=True)
+                kinds = {1: "release", 2: "beta", 3: "alpha"}
+                for f in files:
+                    games = [str(g) for g in (f.get("gameVersions") or [])]
+                    out.append({
+                        "id": str(f["id"]),
+                        "name": str(f.get("displayName") or f.get("fileName") or f["id"]),
+                        "type": kinds.get(int(f.get("releaseType") or 1), "release"),
+                        "date": f.get("fileDate"),
+                        "mc": [g for g in games if re.match(r"^\d+\.\d+", g)],
+                        "loaders": [g for g in games if not re.match(r"^\d", g)],
+                    })
+            else:
+                versions = http_get_json(
+                    f"{MODRINTH_API}/project/{urllib.parse.quote(project_id)}/version")
+                for v in versions or []:
+                    if not v.get("id") or not v.get("files"):
+                        continue
+                    out.append({
+                        "id": str(v["id"]),
+                        "name": str(v.get("name") or v.get("version_number") or v["id"]),
+                        "number": str(v.get("version_number") or ""),
+                        "type": str(v.get("version_type") or "release"),
+                        "date": v.get("date_published"),
+                        "mc": [str(g) for g in (v.get("game_versions") or [])],
+                        "loaders": [str(g) for g in (v.get("loaders") or [])],
+                    })
+                out.sort(key=lambda v: str(v.get("date") or ""), reverse=True)
+            return {"success": True, "versions": out}
+        except Exception:
+            log_exception("get_modpack_versions")
+            return {"success": False, "error": "Couldn't load this modpack's versions."}
+
+    def install_modpack(self, project_id, version_id=None):
+        """Install a modpack as a new instance. version_id picks a specific version from
+        get_modpack_versions; without it the newest release is used."""
+        if version_id is not None and not isinstance(version_id, (str, int)):
+            return {"success": False, "error": "Invalid modpack version."}
+        version_id = str(version_id).strip() if version_id not in (None, "") else None
         with self._proc_lock:
             if self._addon_busy:
                 return {"success": False, "error": "Another addon install is already running."}
             self._addon_busy = True
         if isinstance(project_id, str) and project_id.startswith("cf:"):
-            threading.Thread(target=self._cf_modpack_worker, args=(project_id,), daemon=True).start()
+            threading.Thread(target=self._cf_modpack_worker, args=(project_id, version_id),
+                             daemon=True).start()
         else:
-            threading.Thread(target=self._modpack_worker, args=(project_id,), daemon=True).start()
+            threading.Thread(target=self._modpack_worker, args=(project_id, version_id),
+                             daemon=True).start()
         return {"success": True}
 
-    def _cf_modpack_worker(self, project_id):
+    def _cf_modpack_worker(self, project_id, version_id=None):
         """Install a CurseForge modpack: manifests list projectID/fileID pairs plus overrides."""
         pack_path = work = None
         try:
@@ -8858,11 +8914,16 @@ class API(ServerMixin):
             zips = [f for f in files if str(f.get("fileName") or "").lower().endswith(".zip")]
             files = zips or files
             files.sort(key=lambda f: str(f.get("fileDate") or ""), reverse=True)
-            releases = [f for f in files if int(f.get("releaseType") or 1) == 1]
-            pool = releases or files
-            if not pool:
-                raise RuntimeError("This modpack has no downloadable file.")
-            chosen = pool[0]
+            if version_id:
+                chosen = next((f for f in files if str(f.get("id")) == version_id), None)
+                if not chosen:
+                    raise RuntimeError("That modpack version isn't available anymore.")
+            else:
+                releases = [f for f in files if int(f.get("releaseType") or 1) == 1]
+                pool = releases or files
+                if not pool:
+                    raise RuntimeError("This modpack has no downloadable file.")
+                chosen = pool[0]
 
             work = TMP_DIR / f"cf_pack_{mod_id}"
             work.mkdir(parents=True, exist_ok=True)
@@ -8974,7 +9035,7 @@ class API(ServerMixin):
             with self._proc_lock:
                 self._addon_busy = False
 
-    def _modpack_worker(self, project_id):
+    def _modpack_worker(self, project_id, version_id=None):
         pack_path = None
         try:
             tracker = ProgressTracker(self.emit)
@@ -8983,7 +9044,12 @@ class API(ServerMixin):
 
             project = http_get_json(f"{MODRINTH_API}/project/{urllib.parse.quote(project_id)}")
             versions = http_get_json(f"{MODRINTH_API}/project/{urllib.parse.quote(project_id)}/version")
-            version = pick_best_version(versions)
+            if version_id:
+                version = next((v for v in versions if str(v.get("id")) == version_id), None)
+                if not version:
+                    raise RuntimeError("That modpack version isn't available anymore.")
+            else:
+                version = pick_best_version(versions)
             if not version:
                 raise RuntimeError("This modpack has no downloadable versions.")
             files = version.get("files", [])

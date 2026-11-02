@@ -5926,10 +5926,12 @@ function openAddon(hit) {
     <div id="modal-action"></div>`;
   const action = $("#modal-action");
   if (isPack) {
-    action.innerHTML = `<button class="btn primary" id="btn-install-pack">${icon("download", 16)}Install as new instance</button>
+    action.innerHTML = `<div class="pack-ver" style="margin:0 0 14px"><div class="hint" style="margin:0 0 6px">Version</div><div id="pack-version" style="width:100%"></div></div>
+      <button class="btn primary" id="btn-install-pack">${icon("download", 16)}Install as new instance</button>
       <div class="install-box" id="pack-box" style="margin:16px 0 0"><div class="install-top"><span class="t" id="pack-title">Installing</span><span class="d" id="pack-detail"></span></div><div class="bar big"><div id="pack-bar"></div></div></div>
       <div class="form-error" id="pack-error" style="margin-top:10px"></div>`;
     $("#btn-install-pack").addEventListener("click", installModpack);
+    initPackVersions(hit);
   } else if (isMod) {
     action.innerHTML = `<div class="btn-row">
         <button class="btn primary" id="btn-pick-target" style="min-width:220px;justify-content:center;font-size:16px;font-weight:650;padding:11px 26px">${icon("download", 16)}Install</button>
@@ -6019,15 +6021,41 @@ async function installSelectedAddon() {
     btn.disabled = false;
   }
 }
+let packVerSel = null;
+function packVersionLabel(v) {
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const mc = (v.mc || []).slice(0, 2).join(", ") + ((v.mc || []).length > 2 ? "…" : "");
+  const when = v.date ? new Date(v.date).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
+  return [clip(v.name || v.number || v.id, 42), mc, when].filter(Boolean).join("  ·  ");
+}
+async function initPackVersions(hit) {
+  // The dropdown menu lives on <body>, so drop the previous one before making a new one.
+  if (packVerSel) { packVerSel.close(); packVerSel.menu.remove(); OPEN_SELECTS.delete(packVerSel); }
+  const sel = packVerSel = new CSelect($("#pack-version"), { placement: "auto", minWidth: 480, placeholder: "Loading versions..." });
+  const latest = { value: "", label: "Latest release (recommended)" };
+  sel.setOptions([latest], "");
+  const r = await callApi("get_modpack_versions", hit.project_id);
+  if (packVerSel !== sel || modalHit !== hit) return;   // a different modal was opened meanwhile
+  if (!r.success || !(r.versions || []).length) { sel.setOptions([latest], ""); return; }
+  sel.setOptions([latest].concat(r.versions.map((v) => ({
+    value: v.id, label: packVersionLabel(v), tag: v.type && v.type !== "release" ? v.type : "",
+  }))), "");
+}
 async function installModpack() {
   if (modalBusy) return;
   modalBusy = true;
   $("#btn-install-pack").disabled = true;
+  if (packVerSel) packVerSel.setDisabled(true);
   $("#pack-error").textContent = "";
   $("#pack-box").classList.add("show");
   $("#pack-bar").style.width = "0%";
-  const r = await callApi("install_modpack", modalHit.project_id);
-  if (!r.success) { modalBusy = false; $("#btn-install-pack").disabled = false; $("#pack-box").classList.remove("show"); $("#pack-error").textContent = r.error; }
+  const versionId = packVerSel ? packVerSel.getValue() : "";
+  const r = await callApi("install_modpack", modalHit.project_id, versionId || null);
+  if (!r.success) {
+    modalBusy = false; $("#btn-install-pack").disabled = false;
+    if (packVerSel) packVerSel.setDisabled(false);
+    $("#pack-box").classList.remove("show"); $("#pack-error").textContent = r.error;
+  }
 }
 $$(".social-btn").forEach((btn) => btn.addEventListener("click", () => {
   const url = btn.dataset.url;
@@ -7339,7 +7367,7 @@ window.__critEvent = function (name, data) {
       break;
     case "addonError":
       modalBusy = false;
-      if ($("#pack-error")) { $("#pack-error").textContent = data.message || "Install failed."; $("#btn-install-pack").disabled = false; $("#pack-box").classList.remove("show"); }
+      if ($("#pack-error")) { $("#pack-error").textContent = data.message || "Install failed."; $("#btn-install-pack").disabled = false; $("#pack-box").classList.remove("show"); if (packVerSel) packVerSel.setDisabled(false); }
       toast(data.message || "Modpack install failed.", "error");
       break;
     case "updateProgress":

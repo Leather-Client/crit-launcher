@@ -2861,10 +2861,41 @@ def horizon_prepare_build(vdir: Path, mc_version: str, mc_root: Path, server_jar
     if code != 0:
         logging.error("horizon-prepare failed:\n%s", output[-4000:])
         raise RuntimeError("Horizon couldn't build the game resources. See launcher.log for details.")
-    code, output = horizon_run_logged(base + ["sounds", "--minecraft-dir", str(mc_root)],
-                                      vdir, tracker, "Copying Horizon's sounds", java_path)
+
+
+HORIZON_SOUNDS_OK = ".crit-sounds-ok"
+
+_HORIZON_SOUNDS_TRIED = set()
+
+
+def horizon_sounds_pending(resources) -> bool:
+    """True when this instance's sounds still need copying and haven't been tried this session."""
+    return (not (Path(resources) / HORIZON_SOUNDS_OK).is_file()
+            and str(resources) not in _HORIZON_SOUNDS_TRIED)
+
+
+def horizon_copy_sounds(vdir: Path, mc_root: Path, tracker, java_path) -> bool:
+    """Copy the game's sounds (about 380 MB) from the Minecraft files this launcher downloaded.
+
+    horizon-prepare wants the subcommand first: `horizon-prepare sounds --root ...`. With the
+    options first it fails with "unrecognized argument: sounds" and the game is silent.
+    """
+    resources = horizon_resources_dir(vdir)
+    _HORIZON_SOUNDS_TRIED.add(str(resources))
+    prep = Path(vdir) / horizon_exe("horizon-prepare")
+    if not prep.is_file():
+        logging.warning("Can't copy Horizon's sounds: %s is missing", prep.name)
+        return False
+    cmd = [str(prep), "sounds", "--root", str(vdir), "--minecraft-dir", str(mc_root)]
+    code, output = horizon_run_logged(cmd, vdir, tracker, "Copying Horizon's sounds", java_path)
     if code != 0:
         logging.warning("horizon-prepare sounds failed (the game will be silent):\n%s", output[-2000:])
+        return False
+    try:
+        (resources / HORIZON_SOUNDS_OK).write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        log_exception("write sounds marker")
+    return True
 
 
 def horizon_setup(name: str, tracker) -> dict:
@@ -2890,7 +2921,15 @@ def horizon_setup(name: str, tracker) -> dict:
     if not (resources / "horizon-resources.json").is_file():
         raise RuntimeError("Horizon finished preparing but its resources are missing.")
 
+    sounds_ok = (resources / HORIZON_SOUNDS_OK).is_file()
+    if not sounds_ok:
+        # Also repairs instances that were prepared earlier without sounds. The Minecraft files
+        # are already downloaded by now, so this reuses them instead of fetching anything.
+        mc_root, _ = horizon_ensure_minecraft(mc_version, tracker)
+        sounds_ok = horizon_copy_sounds(vdir, mc_root, tracker, java_path)
+
     return {
+        "horizon_sounds": sounds_ok,
         "version": mc_version,
         "loader": "horizon",
         "loader_version": None,
@@ -7658,7 +7697,8 @@ class API(ServerMixin):
             if meta.get("loader") == "horizon":
                 
                 saved = meta.get("horizon_resources")
-                if meta.get("horizon_prepared") and saved and Path(saved).is_dir():
+                if (meta.get("horizon_prepared") and saved and Path(saved).is_dir()
+                        and not horizon_sounds_pending(saved)):
                     return self._do_horizon_launch(instance_name, meta)
                 with self._proc_lock:
                     self._installing.add(instance_name)
@@ -7724,8 +7764,10 @@ class API(ServerMixin):
             tracker = ProgressTracker(self.emit)
             info = horizon_setup(name, tracker)
             update_instance_meta(name, lambda m: m.update(info))
-            self.emit("installFinished", {"instance": name,
-                                          "message": f"Horizon is ready in {name}"})
+            message = f"Horizon is ready in {name}"
+            if not info.get("horizon_sounds"):
+                message += ", but its sounds couldn't be set up, so the game will be silent. See launcher.log"
+            self.emit("installFinished", {"instance": name, "message": message})
             self.push_state()
             if then_launch:
                 meta = read_instance_meta(name) or {}

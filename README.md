@@ -1,0 +1,37 @@
+# Crit Launcher
+
+Crit Launcher is a open source minecraft launcher written in python and html
+
+<details>
+<summary>notes</summary>
+we are not affiliated with microsoft or mojang
+
+we are not affiliated with modrinth or fastclient
+
+we are not affiliated with fabric forge or neoforge
+
+we are not affiliated with mcdonalds or burger king
+
+the themes which aim to replicate other launchers are completely custom built, no original or decompiled code was used for their creation therefore are completly unrelated, if you are fastclient or modrinth kindly create a support ticket in the discord server for any requests.
+</details>
+
+## project layout
+the backend is the `crit_launcher/` package, one folder per feature. see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for where everything lives and how to debug it.
+
+run from source: `python crit.py` (needs `pywebview`)
+tests: `python -m unittest discover -s tests`
+
+## compilation
+first install the source code (the `icon.ico` is already in the folder)
+then run
+```
+pyinstaller --onefile --windowed --name crit --icon=icon.ico --add-data "index.html;." crit.py
+```
+setup:
+[innosetup](https://jrsoftware.org/isinfo.php)
+then run `packaging/windows/critsetup.iss`
+
+linux: run `packaging/linux/build-appimage.sh` (see `packaging/linux/README.md`)
+
+
+<sub>this readme is valid as of v1.7.1</sub>

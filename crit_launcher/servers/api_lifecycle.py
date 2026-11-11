@@ -5,6 +5,7 @@ import re
 import shutil
 import threading
 import time
+import zipfile
 import urllib.parse
 
 from ..config.paths import SERVERS_DIR
@@ -186,6 +187,15 @@ class ServerLifecycleApi:
                        f"{urllib.parse.quote(meta['loader_version'])}/{urllib.parse.quote(inst)}/server/jar")
                 tracker.reset(1)
                 http_download(url, jar, None, None, tracker.add)
+                # meta.fabricmc.net publishes no checksum for this jar; reject anything that isn't Fabric's launcher.
+                try:
+                    with zipfile.ZipFile(jar) as zf:
+                        ok = any(n.startswith("net/fabricmc/") for n in zf.namelist())
+                except (zipfile.BadZipFile, OSError):
+                    ok = False
+                if not ok:
+                    jar.unlink(missing_ok=True)
+                    raise RuntimeError("Fabric download wasn't a valid server jar.")
             (server_dir(name) / "mods").mkdir(exist_ok=True)
             if meta["software"] == "paper":
                 (server_dir(name) / "plugins").mkdir(exist_ok=True)

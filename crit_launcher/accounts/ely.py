@@ -6,12 +6,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-import zipfile
 from pathlib import Path
 
 from ..config.paths import RUNTIME_DIR
 from ..config.settings import settings_store
-from ..core.fsutil import file_is_valid
+from ..core.fsutil import file_sha256
 from ..core.http import USER_AGENT, http_download, http_get_json
 from ..core.logs import log_exception
 from ..skins.textures import fetch_texture_uri
@@ -23,8 +22,10 @@ ELY_AUTH_URL = "https://authserver.ely.by"
 ELY_SKINS_URL = "https://skinsystem.ely.by"
 ELY_AUTH = ELY_AUTH_URL + "/auth/authenticate"
 ELY_REFRESH = ELY_AUTH_URL + "/auth/refresh"
-ELY_INJECTOR_REPO = "yushijinhun/authlib-injector"
-ELY_INJECTOR_API = "https://api.github.com/repos/" + ELY_INJECTOR_REPO + "/releases/latest"
+# Pinned: this jar runs as a javaagent inside the game, so it's never taken unverified.
+ELY_INJECTOR_URL = ("https://github.com/yushijinhun/authlib-injector/releases/download/"
+                    "v1.2.8/authlib-injector-1.2.8.jar")
+ELY_INJECTOR_SHA256 = "9c7f4343e6c82034958ffb48c14a2cb0c85928be7283103ce17da00c6d5a7b10"
 
 
 def ely_post(url: str, payload: dict, token=None):
@@ -156,25 +157,16 @@ def ely_skin_for(name: str):
 def authlib_injector() -> Path | None:
     """Download authlib-injector once; Ely.by needs it for skins in game."""
     dest = RUNTIME_DIR / "authlib-injector.jar"
-    if file_is_valid(dest, None, None):
-        try:
-            with zipfile.ZipFile(dest) as zf:
-                if any(n.endswith("Premain.class") for n in zf.namelist()):
-                    return dest
-        except (zipfile.BadZipFile, OSError):
-            pass
+    try:
+        if dest.is_file() and file_sha256(dest) == ELY_INJECTOR_SHA256:
+            return dest
+    except OSError:
+        pass
 
     for attempt in range(2):
         try:
-            release = http_get_json(ELY_INJECTOR_API, timeout=20, retries=0)
-            asset = next((a for a in release.get("assets", [])
-                          if (a.get("name") or "").endswith(".jar")), None)
-            if not asset:
-                break
-            http_download(asset["browser_download_url"], dest, asset.get("size"))
-            with zipfile.ZipFile(dest) as zf:
-                if any(n.endswith("Premain.class") for n in zf.namelist()):
-                    return dest
+            http_download(ELY_INJECTOR_URL, dest, None, ELY_INJECTOR_SHA256)
+            return dest
         except Exception:
             log_exception("authlib-injector download")
         dest.unlink(missing_ok=True)

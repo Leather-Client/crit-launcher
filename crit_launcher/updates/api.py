@@ -1,6 +1,5 @@
 """JS-bridge API: self-update."""
 
-import logging
 import os
 import threading
 import time
@@ -12,7 +11,7 @@ from ..core.http import http_download
 from ..core.logs import log_exception
 from ..version import APP_VERSION
 from .changelog import CHANGELOG_REPO, _version_tuple
-from .signature import UPDATE_TRUSTED_KEYS, update_signed_sha256
+from .signature import update_signed_sha256
 
 
 class UpdatesApi:
@@ -66,14 +65,11 @@ class UpdatesApi:
 
             # A hijacked release is only dangerous because we run it, so the
             # signature has to be checked before anything reaches startfile.
-            expected = None
             try:
                 expected = update_signed_sha256(res, Path(url).name)
             except RuntimeError as exc:
-                if UPDATE_TRUSTED_KEYS:
-                    self.emit("updateError", {"message": str(exc)})
-                    return
-                logging.warning("Update signature not checked: %s", exc)
+                self.emit("updateError", {"message": str(exc)})
+                return
             done = [0]
 
             def progress(n):

@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .fsutil import file_sha1
+from .fsutil import file_sha1, file_sha256
 
 
 USER_AGENT = "CritLauncher/1.0 (+https://critlauncher.xyz)"
@@ -76,7 +76,9 @@ def http_download(url: str, dest: Path, expected_size=None, expected_sha1=None,
             if progress_cb:
                 progress_cb(len(chunk))
     if expected_sha1:
-        if file_sha1(tmp) != expected_sha1:
+        # 40 hex chars is sha1 (Mojang), 64 is sha256 (signed update sums, pinned jars).
+        digest = file_sha256 if len(expected_sha1) == 64 else file_sha1
+        if digest(tmp) != expected_sha1.lower():
             tmp.unlink(missing_ok=True)
             raise IOError(f"Checksum mismatch for {dest.name}")
     os.replace(tmp, dest)

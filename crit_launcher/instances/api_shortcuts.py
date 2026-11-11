@@ -114,7 +114,8 @@ class ShortcutsApi:
                     str(ENTRY_SCRIPT), "--launch-instance", instance_name
                 ])
             def ps_quote(value):
-                return "'" + str(value).replace("'", "''") + "'"
+                # PowerShell also ends single-quoted strings on the curly quotes, so double those too.
+                return "'" + re.sub("(['‘’‚‛])", r"\1\1", str(value)) + "'"
 
             script = (
                 "$wsh = New-Object -ComObject WScript.Shell; "

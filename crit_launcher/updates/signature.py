@@ -8,9 +8,7 @@ from ..core.ed25519 import horizon_ed25519_verify
 from ..core.http import http_get_bytes
 
 
-# Releases are signed with a detached ed25519 signature over SHA256SUMS.
-# Empty means the check is skipped (a warning is logged). Fill it in to enforce;
-# see the release notes for how to generate the pair.
+# FILL ME IN
 UPDATE_TRUSTED_KEYS = ()
 UPDATE_SUMS = "SHA256SUMS"
 UPDATE_SIG = "SHA256SUMS.sig"

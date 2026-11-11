@@ -148,7 +148,9 @@ class LaunchApi:
 
             log_path = instance_dir(instance_name) / "launch_output.log"
             log_file = open(log_path, "wb")
-            logging.info("Launching %s: %s", instance_name, " ".join(command)[:2500])
+            shown = ["dontlogtokens!" if i and command[i - 1] == "--accessToken" else c
+                     for i, c in enumerate(command)]
+            logging.info("Launching %s: %s", instance_name, " ".join(shown)[:2500])
 
             try:
                 proc = subprocess.Popen(
